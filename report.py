@@ -1,0 +1,250 @@
+# -*- coding: utf-8 -*-
+"""
+报告生成模块 - 将检查结果汇总输出为标准 Markdown 报告
+"""
+
+import os
+from datetime import datetime
+
+from config import REPORT_DIR
+
+
+def generate_report(results, keywords, output_dir=None):
+    """
+    生成 Markdown 格式的涉密信息检查报告。
+
+    参数:
+        results:    检查结果字典（包含 web/db/file/image 四个模块）
+        keywords:   使用的关键词列表
+        output_dir: 报告输出目录（默认使用配置中的路径）
+
+    返回:
+        str: 生成的报告文件路径
+    """
+    if output_dir is None:
+        output_dir = REPORT_DIR
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 生成带时间戳的文件名
+    now = datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+    filename = f"涉密检查报告_{timestamp}.md"
+    filepath = os.path.join(output_dir, filename)
+
+    # 构建报告内容
+    lines = []
+    lines.append("# 涉密信息综合检查报告")
+    lines.append("")
+    lines.append(f"**检查时间**: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"**检查关键词**: {', '.join(keywords)}")
+    lines.append("")
+
+    # ========== 汇总统计 ==========
+    lines.append("---")
+    lines.append("")
+    lines.append("## 一、汇总统计")
+    lines.append("")
+
+    web = results.get("web", {})
+    db = results.get("db", {})
+    file = results.get("file", {})
+    image = results.get("image", {})
+
+    total_matched = (
+        web.get("matched_pages", 0)
+        + db.get("matched_tables", 0)
+        + file.get("matched_files", 0)
+        + image.get("matched_images", 0)
+    )
+
+    lines.append("| 检查模块 | 检查总数 | 涉密数量 | 备注 |")
+    lines.append("|---------|---------|---------|------|")
+    lines.append(f"| 网页检查 | {web.get('total', 0)} 个页面 | "
+                 f"{web.get('matched_pages', 0)} 个页面 | - |")
+    lines.append(f"| 数据库检查 | {db.get('total_records', 0)} 条记录 | "
+                 f"{db.get('matched_tables', 0)} 个表 | - |")
+    enc_count = len(file.get("encrypted_files", []))
+    hid_count = len(file.get("hidden_files", []))
+    file_note = []
+    if enc_count:
+        file_note.append(f"加密{enc_count}个")
+    if hid_count:
+        file_note.append(f"隐藏{hid_count}个")
+    lines.append(f"| 文件检查 | {file.get('supported_files', 0)} 个文件 | "
+                 f"{file.get('matched_files', 0)} 个文件 | "
+                 f"{', '.join(file_note) if file_note else '-'} |")
+    lines.append(f"| 图片检查 | {image.get('total_images', 0)} 张图片 | "
+                 f"{image.get('matched_images', 0)} 张图片 | "
+                 f"OCR: {image.get('ocr_engine', 'N/A')} |")
+    lines.append("")
+    lines.append(f"**涉密总计**: {total_matched} 处")
+    lines.append("")
+
+    # ========== 网页检查详情 ==========
+    lines.append("---")
+    lines.append("")
+    lines.append("## 二、网页检查详情")
+    lines.append("")
+    web_details = web.get("details", [])
+    if web_details:
+        lines.append(f"共发现 **{len(web_details)}** 处涉密匹配：")
+        lines.append("")
+        lines.append("| 序号 | URL | 行号 | 关键词 | 内容摘要 |")
+        lines.append("|-----|-----|------|-------|---------|")
+        for idx, d in enumerate(web_details, 1):
+            url_short = d['url'][:60] + "..." if len(d['url']) > 60 else d['url']
+            content_short = d['content'][:50].replace("|", "\\|")
+            lines.append(f"| {idx} | {url_short} | {d['line_no']} | "
+                         f"{d['keyword']} | {content_short} |")
+    else:
+        lines.append("未发现涉密内容。")
+    lines.append("")
+
+    # ========== 数据库检查详情 ==========
+    lines.append("---")
+    lines.append("")
+    lines.append("## 三、数据库检查详情")
+    lines.append("")
+    db_details = db.get("details", [])
+    if db_details:
+        lines.append(f"共发现 **{len(db_details)}** 处涉密匹配：")
+        lines.append("")
+        lines.append("| 序号 | 表名 | 字段 | 记录ID | 关键词 |")
+        lines.append("|-----|------|------|-------|-------|")
+        for idx, d in enumerate(db_details, 1):
+            lines.append(f"| {idx} | {d['table']} | {d['field']} | "
+                         f"{d['record_id']} | {d['keyword']} |")
+    else:
+        lines.append("未发现涉密内容。")
+    lines.append("")
+
+    # ========== 文件检查详情 ==========
+    lines.append("---")
+    lines.append("")
+    lines.append("## 四、文件检查详情")
+    lines.append("")
+
+    # 各类型文件统计
+    type_counts = file.get("type_counts", {})
+    if type_counts:
+        lines.append("### 4.1 文件类型统计")
+        lines.append("")
+        lines.append("| 文件类型 | 数量 |")
+        lines.append("|---------|------|")
+        type_names = {
+            '.txt': 'TXT 文本', '.doc': 'DOC (旧版Word)',
+            '.docx': 'DOCX (Word)', '.xls': 'XLS (旧版Excel)',
+            '.xlsx': 'XLSX (Excel)', '.ppt': 'PPT (旧版PowerPoint)',
+            '.pptx': 'PPTX (PowerPoint)', '.pdf': 'PDF'
+        }
+        for ext, count in sorted(type_counts.items()):
+            name = type_names.get(ext, ext)
+            lines.append(f"| {name} | {count} |")
+        lines.append("")
+
+    # 加密文件
+    encrypted_files = file.get("encrypted_files", [])
+    lines.append("### 4.2 加密文件")
+    lines.append("")
+    if encrypted_files:
+        lines.append(f"共发现 **{len(encrypted_files)}** 个加密或无法读取的文件：")
+        lines.append("")
+        for idx, fpath in enumerate(encrypted_files, 1):
+            lines.append(f"{idx}. `{fpath}`")
+    else:
+        lines.append("未发现加密文件。")
+    lines.append("")
+
+    # 隐藏文件
+    hidden_files = file.get("hidden_files", [])
+    lines.append("### 4.3 隐藏文件")
+    lines.append("")
+    if hidden_files:
+        lines.append(f"共发现 **{len(hidden_files)}** 个隐藏文件：")
+        lines.append("")
+        for idx, fpath in enumerate(hidden_files, 1):
+            lines.append(f"{idx}. `{fpath}`")
+    else:
+        lines.append("未发现隐藏文件。")
+    lines.append("")
+
+    # 涉密文件匹配详情
+    lines.append("### 4.4 涉密匹配详情")
+    lines.append("")
+    file_details = file.get("details", [])
+    if file_details:
+        lines.append(f"共发现 **{len(file_details)}** 处涉密匹配：")
+        lines.append("")
+        lines.append("| 序号 | 文件路径 | 行号 | 类型 | 关键词 | 内容摘要 |")
+        lines.append("|-----|---------|------|------|-------|---------|")
+        for idx, d in enumerate(file_details, 1):
+            file_short = (d['file'][:50] + "..."
+                          if len(d['file']) > 50 else d['file'])
+            content_short = d['content'][:50].replace("|", "\\|")
+            lines.append(f"| {idx} | {file_short} | {d['line_no']} | "
+                         f"{d['file_type']} | {d['keyword']} | "
+                         f"{content_short} |")
+    else:
+        lines.append("未发现涉密内容。")
+    lines.append("")
+
+    # ========== 图片检查详情 ==========
+    lines.append("---")
+    lines.append("")
+    lines.append("## 五、图片检查详情")
+    lines.append("")
+
+    # 图片类型统计
+    img_type_counts = image.get("type_counts", {})
+    lines.append(f"OCR引擎: **{image.get('ocr_engine', 'N/A')}**")
+    lines.append("")
+    lines.append(f"共扫描图片: **{image.get('total_images', 0)}** 张")
+    lines.append(f"涉密图片: **{image.get('matched_images', 0)}** 张")
+    lines.append("")
+
+    if img_type_counts:
+        lines.append("### 5.1 图片类型统计")
+        lines.append("")
+        lines.append("| 图片类型 | 数量 |")
+        lines.append("|---------|------|")
+        img_type_names = {
+            '.png': 'PNG', '.jpg': 'JPG', '.jpeg': 'JPEG',
+            '.bmp': 'BMP', '.tiff': 'TIFF', '.tif': 'TIF',
+            '.gif': 'GIF'
+        }
+        for ext, count in sorted(img_type_counts.items()):
+            name = img_type_names.get(ext, ext.upper())
+            lines.append(f"| {name} | {count} |")
+        lines.append("")
+
+    # 涉密图片列表
+    image_details = image.get("details", [])
+    lines.append("### 5.2 涉密图片列表")
+    lines.append("")
+    if image_details:
+        lines.append(f"共发现 **{len(image_details)}** 处涉密匹配：")
+        lines.append("")
+        lines.append("| 序号 | 所在目录 | 文件名 | 关键词 | OCR识别文本 |")
+        lines.append("|-----|---------|-------|-------|-----------|")
+        for idx, d in enumerate(image_details, 1):
+            dir_short = (d['directory'][:40] + "..."
+                         if len(d['directory']) > 40 else d['directory'])
+            ocr_short = d['ocr_text'][:60].replace("|", "\\|")
+            lines.append(f"| {idx} | `{dir_short}` | "
+                         f"{d['filename']} | {d['keyword']} | {ocr_short} |")
+    else:
+        lines.append("未发现涉密内容。")
+    lines.append("")
+
+    # ========== 报告尾部 ==========
+    lines.append("---")
+    lines.append("")
+    lines.append("*报告自动生成，仅供参考。请以人工复核为准。*")
+
+    # 写入文件
+    report_content = "\n".join(lines)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(report_content)
+
+    return filepath
