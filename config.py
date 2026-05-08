@@ -6,7 +6,12 @@
 # ========== 默认路径（严格按实验文档） ==========
 DOC_DIR = r"F:\保密技术检查\document"
 IMG_DIR = r"F:\保密技术检查\image"
-DB_FILE = r"F:\保密技术检查\baomi.sql"
+
+# ========== MySQL 数据库连接配置 ==========
+DB_HOST = "localhost"
+DB_USER = "root"
+DB_PASSWORD = "521581"
+DB_NAME = "baomi"
 
 # ========== 默认关键词（严格按实验文档） ==========
 DEFAULT_KEYWORDS = ["涉密", "秘密", "机密", "绝密", "保密", "泄密"]

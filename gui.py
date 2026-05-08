@@ -12,7 +12,8 @@ import threading
 import queue
 import time
 
-from config import (DOC_DIR, IMG_DIR, DB_FILE,
+from config import (DOC_DIR, IMG_DIR,
+                    DB_HOST, DB_USER, DB_PASSWORD, DB_NAME,
                     DEFAULT_KEYWORDS, WEB_TARGET_URL)
 from checker_web import check_web
 from checker_db import check_database
@@ -91,17 +92,14 @@ class App:
                    command=lambda: self._browse_dir(self.img_dir_var)
                    ).grid(row=1, column=2)
 
-        # 数据库文件
-        ttk.Label(config_frame, text="数据库文件:", width=lbl_w,
+        # 数据库名
+        ttk.Label(config_frame, text="数据库名:", width=lbl_w,
                   anchor=tk.E).grid(row=2, column=0,
                                     padx=(0, 8), pady=row_pad)
-        self.db_file_var = tk.StringVar(value=DB_FILE)
-        ttk.Entry(config_frame, textvariable=self.db_file_var,
-                  state="readonly").grid(row=2, column=1,
-                                         sticky=tk.EW, padx=(0, ctrl_pad))
-        ttk.Button(config_frame, text="浏 览", width=8,
-                   command=lambda: self._browse_file(self.db_file_var)
-                   ).grid(row=2, column=2)
+        self.db_name_var = tk.StringVar(value=DB_NAME)
+        ttk.Entry(config_frame, textvariable=self.db_name_var
+                  ).grid(row=2, column=1, sticky=tk.EW,
+                         padx=(0, ctrl_pad))
 
         # 关键词
         ttk.Label(config_frame, text="检查关键词:", width=lbl_w,
@@ -194,13 +192,6 @@ class App:
         if path:
             var.set(path)
 
-    def _browse_file(self, var):
-        """选择文件"""
-        path = filedialog.askopenfilename(
-            filetypes=[("SQL文件", "*.sql"), ("所有文件", "*.*")])
-        if path:
-            var.set(path)
-
     # ==================== 检查控制 ====================
 
     def _start_check(self):
@@ -248,79 +239,135 @@ class App:
         使用日志队列与主线程通信。
         """
         try:
-            total_steps = 4
+            web_url_input = self.web_url_var.get().strip()
+            db_name_input = self.db_name_var.get().strip()
+            doc_dir_input = self.doc_dir_var.get().strip()
+            img_dir_input = self.img_dir_var.get().strip()
+
+            total_steps = sum(1 for x in [web_url_input, db_name_input,
+                                          doc_dir_input, img_dir_input] if x)
+            if total_steps == 0:
+                self.log_queue.put(("WARN", "所有检查项均为空，无任务可执行"))
+                return
             current_step = 0
 
             def log_cb(msg):
                 self.log_queue.put(("INFO", msg))
 
             # ---------- 1. 网页检查 ----------
-            current_step += 1
-            self.log_queue.put(("INFO", ""))
-            self.log_queue.put(("INFO", "━" * 50))
-            self.log_queue.put(("INFO",
-                                f"[1/{total_steps}] 网页检查 - {self.web_url_var.get()}"))
-            self.log_queue.put(("INFO", "━" * 50))
-            self._update_progress(5)
+            if web_url_input:
+                current_step += 1
+                self.log_queue.put(("INFO", ""))
+                self.log_queue.put(("INFO", "━" * 50))
+                self.log_queue.put(("INFO",
+                                    f"[1/{total_steps}] 网页检查 - {web_url_input}"))
+                self.log_queue.put(("INFO", "━" * 50))
+                self._update_progress(5)
 
-            web_result = check_web(
-                self.web_url_var.get(), keywords, log_callback=log_cb)
-            self.results["web"] = web_result
-            self._update_progress(25)
-            self.log_queue.put(("SUCCESS",
-                                f"  网页检查完成: {web_result['total']} 个页面, "
-                                f"{web_result['matched_pages']} 个涉密"))
+                web_result = check_web(
+                    web_url_input, keywords, log_callback=log_cb)
+                self.results["web"] = web_result
+                self._update_progress(25)
+                self.log_queue.put(("SUCCESS",
+                                    f"  网页检查完成: {web_result['total']} 个页面, "
+                                    f"{web_result['matched_pages']} 个涉密"))
+            else:
+                current_step += 1
+                self.log_queue.put(("INFO", ""))
+                self.log_queue.put(("INFO", "━" * 50))
+                self.log_queue.put(("INFO",
+                                    f"[{current_step}/{total_steps}] 网页检查 - 已跳过（未填写网址）"))
+                self.log_queue.put(("INFO", "━" * 50))
+                web_result = {"total": 0, "matched_pages": 0, "details": []}
+                self.results["web"] = web_result
 
             # ---------- 2. 数据库检查 ----------
-            current_step += 1
-            self.log_queue.put(("INFO", ""))
-            self.log_queue.put(("INFO", "━" * 50))
-            self.log_queue.put(("INFO",
-                                f"[2/{total_steps}] 数据库检查 - {self.db_file_var.get()}"))
-            self.log_queue.put(("INFO", "━" * 50))
-            self._update_progress(30)
+            if db_name_input:
+                current_step += 1
+                self.log_queue.put(("INFO", ""))
+                self.log_queue.put(("INFO", "━" * 50))
+                self.log_queue.put(("INFO",
+                                    f"[{current_step}/{total_steps}] 数据库检查 - {db_name_input}"))
+                self.log_queue.put(("INFO", "━" * 50))
+                self._update_progress(30)
 
-            db_result = check_database(
-                self.db_file_var.get(), keywords, log_callback=log_cb)
-            self.results["db"] = db_result
-            self._update_progress(50)
-            self.log_queue.put(("SUCCESS",
-                                f"  数据库检查完成: {db_result['total_records']} 条记录, "
-                                f"{db_result['matched_tables']} 个涉密表"))
+                db_result = check_database(
+                    db_name_input, keywords, log_callback=log_cb,
+                    host=DB_HOST, user=DB_USER, password=DB_PASSWORD)
+                self.results["db"] = db_result
+                self._update_progress(50)
+                self.log_queue.put(("SUCCESS",
+                                    f"  数据库检查完成: {db_result['total_records']} 条记录, "
+                                    f"{db_result['matched_tables']} 个涉密表"))
+            else:
+                current_step += 1
+                self.log_queue.put(("INFO", ""))
+                self.log_queue.put(("INFO", "━" * 50))
+                self.log_queue.put(("INFO",
+                                    f"[{current_step}/{total_steps}] 数据库检查 - 已跳过（未填写数据库名）"))
+                self.log_queue.put(("INFO", "━" * 50))
+                db_result = {"total_tables": 0, "total_records": 0,
+                             "matched_tables": 0, "details": []}
+                self.results["db"] = db_result
 
             # ---------- 3. 文件检查 ----------
-            current_step += 1
-            self.log_queue.put(("INFO", ""))
-            self.log_queue.put(("INFO", "━" * 50))
-            self.log_queue.put(("INFO",
-                                f"[3/{total_steps}] 文件检查 - {self.doc_dir_var.get()}"))
-            self.log_queue.put(("INFO", "━" * 50))
-            self._update_progress(55)
+            if doc_dir_input:
+                current_step += 1
+                self.log_queue.put(("INFO", ""))
+                self.log_queue.put(("INFO", "━" * 50))
+                self.log_queue.put(("INFO",
+                                    f"[{current_step}/{total_steps}] 文件检查 - {doc_dir_input}"))
+                self.log_queue.put(("INFO", "━" * 50))
+                self._update_progress(55)
 
-            file_result = check_files(
-                self.doc_dir_var.get(), keywords, log_callback=log_cb)
-            self.results["file"] = file_result
-            self._update_progress(80)
-            self.log_queue.put(("SUCCESS",
-                                f"  文件检查完成: {file_result['supported_files']} 个文件, "
-                                f"{file_result['matched_files']} 个涉密"))
+                file_result = check_files(
+                    doc_dir_input, keywords, log_callback=log_cb)
+                self.results["file"] = file_result
+                self._update_progress(80)
+                self.log_queue.put(("SUCCESS",
+                                    f"  文件检查完成: {file_result['supported_files']} 个文件, "
+                                    f"{file_result['matched_files']} 个涉密"))
+            else:
+                current_step += 1
+                self.log_queue.put(("INFO", ""))
+                self.log_queue.put(("INFO", "━" * 50))
+                self.log_queue.put(("INFO",
+                                    f"[{current_step}/{total_steps}] 文件检查 - 已跳过（未填写文档目录）"))
+                self.log_queue.put(("INFO", "━" * 50))
+                file_result = {"total_files": 0, "supported_files": 0,
+                               "matched_files": 0, "type_counts": {},
+                               "encrypted_files": [], "hidden_files": [],
+                               "details": []}
+                self.results["file"] = file_result
 
             # ---------- 4. 图片检查 ----------
-            current_step += 1
-            self.log_queue.put(("INFO", ""))
-            self.log_queue.put(("INFO", "━" * 50))
-            self.log_queue.put(("INFO",
-                                f"[4/{total_steps}] 图片检查 - {self.img_dir_var.get()}"))
-            self.log_queue.put(("INFO", "━" * 50))
-            self._update_progress(85)
+            if img_dir_input:
+                current_step += 1
+                self.log_queue.put(("INFO", ""))
+                self.log_queue.put(("INFO", "━" * 50))
+                self.log_queue.put(("INFO",
+                                    f"[{current_step}/{total_steps}] 图片检查 - {img_dir_input}"))
+                self.log_queue.put(("INFO", "━" * 50))
+                self._update_progress(85)
 
-            image_result = check_images(
-                self.img_dir_var.get(), keywords, log_callback=log_cb)
-            self.results["image"] = image_result
-            self._update_progress(100)
-            self.log_queue.put(("SUCCESS",
-                                f"  图片检查完成: {image_result['total_images']} 张图片, "
-                                f"{image_result['matched_images']} 张涉密"))
+                image_result = check_images(
+                    img_dir_input, keywords, log_callback=log_cb)
+                self.results["image"] = image_result
+                self._update_progress(100)
+                self.log_queue.put(("SUCCESS",
+                                    f"  图片检查完成: {image_result['total_images']} 张图片, "
+                                    f"{image_result['matched_images']} 张涉密"))
+            else:
+                current_step += 1
+                self.log_queue.put(("INFO", ""))
+                self.log_queue.put(("INFO", "━" * 50))
+                self.log_queue.put(("INFO",
+                                    f"[{current_step}/{total_steps}] 图片检查 - 已跳过（未填写图片目录）"))
+                self.log_queue.put(("INFO", "━" * 50))
+                image_result = {"total_images": 0, "matched_images": 0,
+                                "ocr_engine": "N/A", "type_counts": {},
+                                "details": []}
+                self.results["image"] = image_result
 
             # ---------- 完成汇总 ----------
             self.log_queue.put(("INFO", ""))
