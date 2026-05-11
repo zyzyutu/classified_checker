@@ -18,6 +18,7 @@ DEFAULT_KEYWORDS = ["涉密", "秘密", "机密", "绝密", "保密", "泄密"]
 
 # ========== 网页检查配置 ==========
 WEB_TARGET_URL = "https://bm.yangyq.net/"
+WEB_MAX_DEPTH = 5
 
 # ========== 支持的文件类型 ==========
 SUPPORTED_FILE_EXTS = {
@@ -28,4 +29,4 @@ SUPPORTED_FILE_EXTS = {
 }
 
 # ========== 报告输出路径 ==========
-REPORT_DIR = r"F:\保密技术检查"
+REPORT_DIR = r"D:\Tools\Claude\classified_checker"

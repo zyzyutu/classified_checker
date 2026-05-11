@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 from utils import build_combined_pattern
 
 
-def check_web(url, keywords, log_callback=None):
+def check_web(url, keywords, log_callback=None, max_depth=5):
     """
     全站遍历检查网页涉密信息。
 
@@ -20,6 +20,7 @@ def check_web(url, keywords, log_callback=None):
         url:        起始URL
         keywords:   关键词列表
         log_callback: 日志回调函数（可选）
+        max_depth:  最大爬取深度（0表示只检查起始页面）
 
     返回:
         dict: {
@@ -36,7 +37,7 @@ def check_web(url, keywords, log_callback=None):
     base_domain = parsed_base.netloc
 
     visited = set()
-    queue = deque([url])
+    queue = deque([(url, 0)])
     total = 0
     details = []
     matched_urls = set()
@@ -48,14 +49,14 @@ def check_web(url, keywords, log_callback=None):
     }
 
     while queue:
-        current_url = queue.popleft()
+        current_url, depth = queue.popleft()
         if current_url in visited:
             continue
         visited.add(current_url)
         total += 1
 
         if log_callback:
-            log_callback(f"  [网页] 正在检查: {current_url}")
+            log_callback(f"  [网页] [深度{depth}] 正在检查: {current_url}")
 
         try:
             resp = requests.get(current_url, headers=headers, timeout=10,
@@ -86,18 +87,18 @@ def check_web(url, keywords, log_callback=None):
                 })
                 matched_urls.add(current_url)
 
-        # 提取同域名链接，继续遍历（忽略外链）
-        for a_tag in soup.find_all("a", href=True):
-            href = a_tag["href"]
-            full_url = urljoin(current_url, href)
-            parsed = urlparse(full_url)
-            if (parsed.netloc == base_domain
-                    and full_url not in visited
-                    and parsed.scheme in ("http", "https")):
-                # 去除片段标识符
-                clean_url = full_url.split("#")[0]
-                if clean_url not in visited:
-                    queue.append(clean_url)
+        # 未达到最大深度时，提取同域名链接继续遍历
+        if depth < max_depth:
+            for a_tag in soup.find_all("a", href=True):
+                href = a_tag["href"]
+                full_url = urljoin(current_url, href)
+                parsed = urlparse(full_url)
+                if (parsed.netloc == base_domain
+                        and full_url not in visited
+                        and parsed.scheme in ("http", "https")):
+                    clean_url = full_url.split("#")[0]
+                    if clean_url not in visited:
+                        queue.append((clean_url, depth + 1))
 
     return {
         "total": total,
