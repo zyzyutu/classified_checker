@@ -14,12 +14,14 @@ import queue
 
 from config import (DOC_DIR, IMG_DIR,
                     DB_HOST, DB_USER, DB_PASSWORD, DB_NAME,
-                    DEFAULT_KEYWORDS, WEB_TARGET_URL, WEB_MAX_DEPTH)
+                    DEFAULT_KEYWORDS, WEB_TARGET_URL, WEB_MAX_DEPTH,
+                    WEB_MAX_WORKERS, WEB_CACHE_PATH, RESULTS_PATH)
 from checker_web import check_web
 from checker_db import check_database
 from checker_file import check_files
 from checker_image import check_images
 from report import generate_report
+from results_manager import save_results, load_results, format_history_summary
 
 
 # ========== 样式常量 ==========
@@ -49,8 +51,12 @@ class App:
         self.log_queue = queue.Queue()
         # 检查结果存储
         self.results = {}
+        # 已完成的模块（支持断点续查）
+        self._completed_modules = set()
         # 检查线程引用
         self.check_thread = None
+        # 停止信号
+        self._stop_event = threading.Event()
 
         self._setup_styles()
         self._build_ui()
@@ -104,7 +110,7 @@ class App:
         top_frame = ttk.Frame(main_frame)
         top_frame.grid(row=1, column=0, sticky=tk.EW)
         top_frame.grid_propagate(False)
-        top_frame.configure(height=620)
+        top_frame.configure(height=780)
 
         # ---------- 配置区域 ----------
         config_frame = ttk.LabelFrame(top_frame, text=" 检查配置 ",
@@ -184,6 +190,34 @@ class App:
                   font=("Microsoft YaHei", 12)).pack(side=tk.LEFT, padx=(10, 0))
         self.web_depth_var.trace_add("write", self._update_depth_label)
 
+        # 并行线程数
+        ttk.Label(config_frame, text="并行线程数:", width=lbl_w,
+                  anchor=tk.E, font=lbl_font).grid(row=6, column=0, padx=(0, 8), pady=row_pad)
+        self.web_workers_var = tk.IntVar(value=WEB_MAX_WORKERS)
+        workers_frame = ttk.Frame(config_frame)
+        workers_frame.grid(row=6, column=1, sticky=tk.W, padx=(0, ctrl_pad))
+        ttk.Scale(workers_frame, from_=1, to=16, variable=self.web_workers_var,
+                  orient=tk.HORIZONTAL, length=350).pack(side=tk.LEFT)
+        self.workers_label = ttk.Label(workers_frame, text=str(WEB_MAX_WORKERS),
+                                       width=3, foreground=ACCENT_COLOR,
+                                       font=("Consolas", 15, "bold"))
+        self.workers_label.pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(workers_frame, text="(1=单线程, 建议4~8)",
+                  foreground="#888888",
+                  font=("Microsoft YaHei", 12)).pack(side=tk.LEFT, padx=(10, 0))
+        self.web_workers_var.trace_add("write", self._update_workers_label)
+
+        # 增量检查开关
+        self.web_incremental_var = tk.BooleanVar(value=True)
+        incr_frame = ttk.Frame(config_frame)
+        incr_frame.grid(row=7, column=0, columnspan=2, sticky=tk.W,
+                        padx=(0, 8), pady=row_pad)
+        ttk.Checkbutton(incr_frame, text="增量检查（检测页面更新）",
+                        variable=self.web_incremental_var).pack(side=tk.LEFT)
+        ttk.Label(incr_frame, text="  启用后仅检查更新的页面，跳过未变化的页面",
+                  foreground="#888888",
+                  font=("Microsoft YaHei", 12)).pack(side=tk.LEFT, padx=(8, 0))
+
         # ---------- 操作按钮 ----------
         btn_frame = ttk.Frame(top_frame)
         btn_frame.pack(fill=tk.X, padx=2, pady=(0, 4))
@@ -213,6 +247,14 @@ class App:
                                     activebackground="#42A5F5", cursor="hand2",
                                     state=tk.DISABLED)
         self.report_btn.pack(side=tk.LEFT, padx=(0, 14))
+
+        self.history_btn = tk.Button(btn_frame, text="查看历史",
+                                     command=self._show_history,
+                                     bg="#5D4037", fg="white",
+                                     font=("Microsoft YaHei", 15),
+                                     relief=tk.FLAT, padx=28, pady=12,
+                                     activebackground="#795548", cursor="hand2")
+        self.history_btn.pack(side=tk.LEFT, padx=(0, 14))
 
         self.clear_btn = tk.Button(btn_frame, text="清空日志",
                                    command=self._clear_log,
@@ -265,6 +307,10 @@ class App:
     def _update_depth_label(self, *_):
         """更新深度标签显示"""
         self.depth_label.config(text=str(self.web_depth_var.get()))
+
+    def _update_workers_label(self, *_):
+        """更新线程数标签显示"""
+        self.workers_label.config(text=str(self.web_workers_var.get()))
 
     def _browse_dir(self, var):
         """选择目录"""
@@ -321,14 +367,21 @@ class App:
         self.start_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
         self.report_btn.config(state=tk.DISABLED)
-        self.progress_var.set(0)
-        self.results = {}
+        self._stop_event.clear()
 
-        self._clear_log()
-        self._log("INFO", "=" * 60)
-        self._log("INFO", "  涉密信息综合检查系统 - 开始检查")
-        self._log("INFO", f"  关键词: {', '.join(keywords)}")
-        self._log("INFO", "=" * 60)
+        # 判断是否续查
+        if self._completed_modules:
+            self._log("INFO", "=" * 60)
+            self._log("INFO", f"  ▶ 续查模式 — 已完成: {', '.join(self._completed_modules)}")
+            self._log("INFO", "  跳过已完成的模块，继续未完成的部分")
+            self._log("INFO", "=" * 60)
+        else:
+            self.results = {}
+            self._clear_log()
+            self._log("INFO", "=" * 60)
+            self._log("INFO", "  涉密信息综合检查系统 - 开始检查")
+            self._log("INFO", f"  关键词: {', '.join(keywords)}")
+            self._log("INFO", "=" * 60)
 
         self.check_thread = threading.Thread(
             target=self._run_check,
@@ -338,154 +391,223 @@ class App:
 
     def _stop_check(self):
         """停止检查"""
+        self._stop_event.set()
         self._log("WARN", "用户中止检查")
-        self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
+        self.start_btn.config(state=tk.NORMAL)
+        if self.results:
+            self.report_btn.config(state=tk.NORMAL)
+
+    def _run_check_one(self, name, func, step_info, progress_start, progress_end):
+        """
+        在守护线程中执行单个检查，支持立即停止。
+        返回结果，被停止则返回 None。
+        """
+        result_box = [None]
+
+        def target():
+            result_box[0] = func()
+
+        t = threading.Thread(target=target, daemon=True)
+        t.start()
+
+        # 轮询等待，每 0.2 秒检查一次停止信号
+        while t.is_alive():
+            if self._stop_event.is_set():
+                self.log_queue.put(("WARN", f"  {step_info} 被中止"))
+                return None
+            t.join(timeout=0.2)
+
+        return result_box[0]
 
     def _run_check(self, keywords):
-        """子线程：执行全部检查任务"""
+        """子线程：执行全部检查任务，支持立即停止和断点续查"""
         try:
             web_url_input = self.web_url_var.get().strip()
             db_name_input = self.db_name_var.get().strip()
             doc_dir_input = self.doc_dir_var.get().strip()
             img_dir_input = self.img_dir_var.get().strip()
             web_depth = self.web_depth_var.get()
+            web_workers = self.web_workers_var.get()
+            web_incremental = self.web_incremental_var.get()
 
             total_steps = 4
             current_step = 0
+            stopped = False
 
             def log_cb(msg):
                 self.log_queue.put(("INFO", msg))
 
             # ---------- 1. 网页检查 ----------
             current_step += 1
-            self.log_queue.put(("INFO", ""))
-            self.log_queue.put(("INFO", "━" * 50))
-            if web_url_input:
+            if "web" in self._completed_modules:
+                pass
+            elif self._stop_event.is_set():
+                stopped = True
+            elif web_url_input:
+                self.log_queue.put(("INFO", ""))
+                self.log_queue.put(("INFO", "━" * 50))
+                mode_str = "增量" if web_incremental else "全量"
                 self.log_queue.put(("INFO",
-                                    f"[{current_step}/{total_steps}] 网页检查 - {web_url_input} (深度{web_depth})"))
+                                    f"[{current_step}/{total_steps}] 网页检查({mode_str}) - {web_url_input} "
+                                    f"(深度{web_depth}, 线程{web_workers})"))
                 self.log_queue.put(("INFO", "━" * 50))
                 self._update_progress(5)
 
-                web_result = check_web(
-                    web_url_input, keywords, log_callback=log_cb,
-                    max_depth=web_depth)
-                self.results["web"] = web_result
-                self._update_progress(25)
-                self.log_queue.put(("SUCCESS",
-                                    f"  网页检查完成: {web_result['total']} 个页面, "
-                                    f"{web_result['matched_pages']} 个涉密"))
-            else:
-                self.log_queue.put(("INFO",
-                                    f"[{current_step}/{total_steps}] 网页检查 - 已跳过（未填写网址）"))
-                self.log_queue.put(("INFO", "━" * 50))
-                web_result = {"total": 0, "matched_pages": 0, "details": []}
-                self.results["web"] = web_result
+                result = self._run_check_one(
+                    "web",
+                    lambda: check_web(web_url_input, keywords,
+                                      log_callback=log_cb, max_depth=web_depth,
+                                      max_workers=web_workers,
+                                      incremental=web_incremental,
+                                      cache_path=WEB_CACHE_PATH),
+                    "网页检查", 5, 25)
+                if result is None:
+                    stopped = True
+                else:
+                    self.results["web"] = result
+                    self._completed_modules.add("web")
+                    self._update_progress(25)
+                    skip_info = ""
+                    if web_incremental:
+                        skip_info = (f", 跳过{result.get('skipped_pages', 0)}个未变化, "
+                                     f"新增/更新{result.get('new_pages', 0)}个")
+                    self.log_queue.put(("SUCCESS",
+                                        f"  网页检查完成: {result['total']} 个页面, "
+                                        f"{result['matched_pages']} 个涉密{skip_info}"))
 
             # ---------- 2. 数据库检查 ----------
             current_step += 1
-            self.log_queue.put(("INFO", ""))
-            self.log_queue.put(("INFO", "━" * 50))
-            if db_name_input:
+            if "db" in self._completed_modules:
+                pass
+            elif self._stop_event.is_set():
+                stopped = True
+            elif db_name_input:
+                self.log_queue.put(("INFO", ""))
+                self.log_queue.put(("INFO", "━" * 50))
                 self.log_queue.put(("INFO",
                                     f"[{current_step}/{total_steps}] 数据库检查 - {db_name_input}"))
                 self.log_queue.put(("INFO", "━" * 50))
                 self._update_progress(30)
 
-                db_result = check_database(
-                    db_name_input, keywords, log_callback=log_cb,
-                    host=DB_HOST, user=DB_USER, password=DB_PASSWORD)
-                self.results["db"] = db_result
-                self._update_progress(50)
-                self.log_queue.put(("SUCCESS",
-                                    f"  数据库检查完成: {db_result['total_records']} 条记录, "
-                                    f"{db_result['matched_tables']} 个涉密表"))
-            else:
-                self.log_queue.put(("INFO",
-                                    f"[{current_step}/{total_steps}] 数据库检查 - 已跳过（未填写数据库名）"))
-                self.log_queue.put(("INFO", "━" * 50))
-                db_result = {"total_tables": 0, "total_records": 0,
-                             "matched_tables": 0, "details": []}
-                self.results["db"] = db_result
+                result = self._run_check_one(
+                    "db",
+                    lambda: check_database(db_name_input, keywords,
+                                           log_callback=log_cb,
+                                           host=DB_HOST, user=DB_USER,
+                                           password=DB_PASSWORD),
+                    "数据库检查", 30, 50)
+                if result is None:
+                    stopped = True
+                else:
+                    self.results["db"] = result
+                    self._completed_modules.add("db")
+                    self._update_progress(50)
+                    self.log_queue.put(("SUCCESS",
+                                        f"  数据库检查完成: {result['total_records']} 条记录, "
+                                        f"{result['matched_tables']} 个涉密表"))
 
             # ---------- 3. 文件检查 ----------
             current_step += 1
-            self.log_queue.put(("INFO", ""))
-            self.log_queue.put(("INFO", "━" * 50))
-            if doc_dir_input:
+            if "file" in self._completed_modules:
+                pass
+            elif self._stop_event.is_set():
+                stopped = True
+            elif doc_dir_input:
+                self.log_queue.put(("INFO", ""))
+                self.log_queue.put(("INFO", "━" * 50))
                 self.log_queue.put(("INFO",
                                     f"[{current_step}/{total_steps}] 文件检查 - {doc_dir_input}"))
                 self.log_queue.put(("INFO", "━" * 50))
                 self._update_progress(55)
 
-                file_result = check_files(
-                    doc_dir_input, keywords, log_callback=log_cb)
-                self.results["file"] = file_result
-                self._update_progress(80)
-                self.log_queue.put(("SUCCESS",
-                                    f"  文件检查完成: {file_result['supported_files']} 个文件, "
-                                    f"{file_result['matched_files']} 个涉密"))
-            else:
-                self.log_queue.put(("INFO",
-                                    f"[{current_step}/{total_steps}] 文件检查 - 已跳过（未填写文档目录）"))
-                self.log_queue.put(("INFO", "━" * 50))
-                file_result = {"total_files": 0, "supported_files": 0,
-                               "matched_files": 0, "type_counts": {},
-                               "encrypted_files": [], "hidden_files": [],
-                               "details": []}
-                self.results["file"] = file_result
+                result = self._run_check_one(
+                    "file",
+                    lambda: check_files(doc_dir_input, keywords,
+                                        log_callback=log_cb,
+                                        max_workers=web_workers),
+                    "文件检查", 55, 80)
+                if result is None:
+                    stopped = True
+                else:
+                    self.results["file"] = result
+                    self._completed_modules.add("file")
+                    self._update_progress(80)
+                    archive_info = ""
+                    arch_count = result.get('archives_scanned', 0)
+                    if arch_count:
+                        archive_info = f", 压缩包{arch_count}个"
+                    self.log_queue.put(("SUCCESS",
+                                        f"  文件检查完成: {result['supported_files']} 个文件, "
+                                        f"{result['matched_files']} 个涉密{archive_info}"))
 
             # ---------- 4. 图片检查 ----------
             current_step += 1
-            self.log_queue.put(("INFO", ""))
-            self.log_queue.put(("INFO", "━" * 50))
-            if img_dir_input:
+            if "image" in self._completed_modules:
+                pass
+            elif self._stop_event.is_set():
+                stopped = True
+            elif img_dir_input:
+                self.log_queue.put(("INFO", ""))
+                self.log_queue.put(("INFO", "━" * 50))
                 self.log_queue.put(("INFO",
                                     f"[{current_step}/{total_steps}] 图片检查 - {img_dir_input}"))
                 self.log_queue.put(("INFO", "━" * 50))
                 self._update_progress(85)
 
-                image_result = check_images(
-                    img_dir_input, keywords, log_callback=log_cb)
-                self.results["image"] = image_result
-                self._update_progress(100)
-                self.log_queue.put(("SUCCESS",
-                                    f"  图片检查完成: {image_result['total_images']} 张图片, "
-                                    f"{image_result['matched_images']} 张涉密"))
-            else:
-                self.log_queue.put(("INFO",
-                                    f"[{current_step}/{total_steps}] 图片检查 - 已跳过（未填写图片目录）"))
-                self.log_queue.put(("INFO", "━" * 50))
-                image_result = {"total_images": 0, "matched_images": 0,
-                                "ocr_engine": "N/A", "type_counts": {},
-                                "details": []}
-                self.results["image"] = image_result
+                result = self._run_check_one(
+                    "image",
+                    lambda: check_images(img_dir_input, keywords,
+                                         log_callback=log_cb),
+                    "图片检查", 85, 100)
+                if result is None:
+                    stopped = True
+                else:
+                    self.results["image"] = result
+                    self._completed_modules.add("image")
+                    self._update_progress(100)
+                    self.log_queue.put(("SUCCESS",
+                                        f"  图片检查完成: {result['total_images']} 张图片, "
+                                        f"{result['matched_images']} 张涉密"))
 
             # ---------- 完成汇总 ----------
             self.log_queue.put(("INFO", ""))
             self.log_queue.put(("INFO", "=" * 60))
-            total_matched = (
-                web_result["matched_pages"]
-                + db_result["matched_tables"]
-                + file_result["matched_files"]
-                + image_result["matched_images"]
-            )
-            self.log_queue.put(("SUCCESS",
-                                f"  全部检查完成! 共发现 {total_matched} 处涉密"))
-            self.log_queue.put(("INFO", "=" * 60))
-
-            self.log_queue.put(("INFO", ""))
-            self.log_queue.put(("INFO", "正在自动生成检查报告..."))
-            try:
-                report_path = generate_report(self.results, keywords)
-                self.log_queue.put(("SUCCESS",
-                                    f"  报告已生成: {report_path}"))
+            if stopped:
+                done = sorted(self._completed_modules) if self._completed_modules else []
+                all_modules = {"web", "db", "file", "image"}
+                pending = sorted(all_modules - self._completed_modules)
+                self.log_queue.put(("WARN", "  ■ 检查已中止"))
+                if done:
+                    self.log_queue.put(("INFO", f"  已完成: {', '.join(done)}"))
+                if pending:
+                    self.log_queue.put(("INFO", f"  待检查: {', '.join(pending)}"))
                 self.log_queue.put(("INFO", ""))
-                self.log_queue.put(("INFO",
-                                    "提示: 可点击「生成报告」按钮重新生成"))
-            except Exception as e:
-                self.log_queue.put(("ERROR",
-                                    f"  报告生成失败: {e}"))
+                self.log_queue.put(("INFO", "  → 点击「生成报告」查看已完成部分的结果"))
+                self.log_queue.put(("INFO", "  → 点击「开始检查」继续未完成的部分"))
+            else:
+                self.log_queue.put(("SUCCESS", "  全部检查完成!"))
+                self._completed_modules.clear()
+
+                self.log_queue.put(("INFO", ""))
+                self.log_queue.put(("INFO", "正在自动生成检查报告..."))
+                try:
+                    report_path = generate_report(self.results, keywords)
+                    self.log_queue.put(("SUCCESS",
+                                        f"  报告已生成: {report_path}"))
+                except Exception as e:
+                    self.log_queue.put(("ERROR",
+                                        f"  报告生成失败: {e}"))
+
+            # ---------- 保存检查结果（最新覆盖模式） ----------
+            if self.results:
+                try:
+                    save_results(self.results, keywords, RESULTS_PATH)
+                    self.log_queue.put(("INFO", "  检查结果已保存"))
+                except Exception as e:
+                    self.log_queue.put(("WARN", f"  结果保存失败: {e}"))
+
+            self.log_queue.put(("INFO", "=" * 60))
 
             self.root.after(0, lambda: self.report_btn.config(state=tk.NORMAL))
 
@@ -514,6 +636,30 @@ class App:
         except Exception as e:
             self._log("ERROR", f"报告生成失败: {e}")
             messagebox.showerror("错误", f"报告生成失败: {e}")
+
+    def _show_history(self):
+        """显示上次检查的历史结果"""
+        data = load_results(RESULTS_PATH)
+        summary = format_history_summary(data)
+
+        # 弹窗显示
+        win = tk.Toplevel(self.root)
+        win.title("检查历史记录")
+        win.geometry("900x600")
+        win.configure(bg=BG_COLOR)
+
+        header = ttk.Label(win, text="上次检查结果",
+                           style="Header.TLabel")
+        header.pack(pady=(10, 5))
+
+        text_widget = scrolledtext.ScrolledText(
+            win, wrap=tk.WORD, font=("Consolas", 13),
+            state=tk.NORMAL, bg="#1e1e1e", fg="#d4d4d4",
+            relief=tk.FLAT, padx=14, pady=12)
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
+        text_widget.insert(tk.END, summary)
+        text_widget.config(state=tk.DISABLED)
 
     # ==================== 日志与进度 ====================
 

@@ -19,14 +19,20 @@ DEFAULT_KEYWORDS = ["涉密", "秘密", "机密", "绝密", "保密", "泄密"]
 # ========== 网页检查配置 ==========
 WEB_TARGET_URL = "https://bm.yangyq.net/"
 WEB_MAX_DEPTH = 5
+WEB_MAX_WORKERS = 6
+WEB_CACHE_PATH = r"D:\Tools\Claude\classified_checker\web_cache.json"
 
 # ========== 支持的文件类型 ==========
 SUPPORTED_FILE_EXTS = {
     '.txt', '.doc', '.docx',
     '.xls', '.xlsx',
     '.ppt', '.pptx',
-    '.pdf'
+    '.pdf',
+    '.zip', '.rar', '.7z'
 }
 
 # ========== 报告输出路径 ==========
 REPORT_DIR = r"D:\Tools\Claude\classified_checker"
+
+# ========== 检查结果持久化 ==========
+RESULTS_PATH = r"D:\Tools\Claude\classified_checker\check_results.json"

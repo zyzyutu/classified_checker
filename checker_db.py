@@ -70,6 +70,7 @@ def check_database(db_name, keywords, log_callback=None,
             total_records = 0
             matched_tables = set()
             details = []
+            table_stats = {}  # {table_name: {total_records, matched_records, columns}}
 
             for table_name in tables:
                 # 获取表字段名
@@ -80,6 +81,9 @@ def check_database(db_name, keywords, log_callback=None,
                 # 查询所有数据
                 cursor.execute(f"SELECT * FROM `{table_name}`")
                 data_rows = cursor.fetchall()
+
+                table_matched_records = set()
+                table_record_count = len(data_rows)
 
                 for row_idx, row in enumerate(data_rows):
                     total_records += 1
@@ -92,12 +96,19 @@ def check_database(db_name, keywords, log_callback=None,
                         matches = pattern.finditer(value_str)
                         for m in matches:
                             matched_tables.add(table_name)
+                            table_matched_records.add(row_idx + 1)
                             details.append({
                                 "table": table_name,
                                 "field": col_name,
                                 "record_id": row_idx + 1,
                                 "keyword": m.group()
                             })
+
+                table_stats[table_name] = {
+                    "total_records": table_record_count,
+                    "matched_records": len(table_matched_records),
+                    "columns": columns
+                }
 
             if log_callback:
                 log_callback(f"  [数据库] 检查完成，共 {total_records} 条记录")
@@ -106,6 +117,7 @@ def check_database(db_name, keywords, log_callback=None,
                 "total_tables": total_tables,
                 "total_records": total_records,
                 "matched_tables": len(matched_tables),
+                "table_stats": table_stats,
                 "details": details
             }
 

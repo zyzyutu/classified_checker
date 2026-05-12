@@ -9,6 +9,11 @@ from datetime import datetime
 from config import REPORT_DIR
 
 
+def _sanitize(text, max_len=50):
+    """清理文本用于 Markdown 表格：去除换行、转义管道符、截断"""
+    return text.replace("\r", "").replace("\n", " ")[:max_len].replace("|", "\\|")
+
+
 def generate_report(results, keywords, output_dir=None):
     """
     生成 Markdown 格式的涉密信息检查报告。
@@ -60,13 +65,24 @@ def generate_report(results, keywords, output_dir=None):
 
     lines.append("| 检查模块 | 检查总数 | 涉密数量 | 备注 |")
     lines.append("|---------|---------|---------|------|")
+    web_note_parts = []
+    skipped = web.get("skipped_pages", 0)
+    new_pages = web.get("new_pages", 0)
+    if skipped:
+        web_note_parts.append(f"跳过{skipped}个")
+    if new_pages:
+        web_note_parts.append(f"新增/更新{new_pages}个")
     lines.append(f"| 网页检查 | {web.get('total', 0)} 个页面 | "
-                 f"{web.get('matched_pages', 0)} 个页面 | - |")
+                 f"{web.get('matched_pages', 0)} 个页面 | "
+                 f"{', '.join(web_note_parts) if web_note_parts else '-'} |")
     lines.append(f"| 数据库检查 | {db.get('total_records', 0)} 条记录 | "
                  f"{db.get('matched_tables', 0)} 个表 | - |")
     enc_count = len(file.get("encrypted_files", []))
     hid_count = len(file.get("hidden_files", []))
+    arch_count = file.get("archives_scanned", 0)
     file_note = []
+    if arch_count:
+        file_note.append(f"压缩包{arch_count}个")
     if enc_count:
         file_note.append(f"加密{enc_count}个")
     if hid_count:
@@ -94,7 +110,7 @@ def generate_report(results, keywords, output_dir=None):
         lines.append("|-----|-----|------|-------|---------|")
         for idx, d in enumerate(web_details, 1):
             url_short = d['url'][:60] + "..." if len(d['url']) > 60 else d['url']
-            content_short = d['content'][:50].replace("|", "\\|")
+            content_short = _sanitize(d['content'])
             lines.append(f"| {idx} | {url_short} | {d['line_no']} | "
                          f"{d['keyword']} | {content_short} |")
     else:
@@ -107,7 +123,21 @@ def generate_report(results, keywords, output_dir=None):
     lines.append("## 三、数据库检查详情")
     lines.append("")
     db_details = db.get("details", [])
+    table_stats = db.get("table_stats", {})
+
+    if table_stats:
+        lines.append("### 3.1 各表统计")
+        lines.append("")
+        lines.append("| 表名 | 记录总数 | 涉密记录数 | 字段数 |")
+        lines.append("|------|---------|-----------|-------|")
+        for tname, stat in table_stats.items():
+            lines.append(f"| {tname} | {stat['total_records']} | "
+                         f"{stat['matched_records']} | {len(stat['columns'])} |")
+        lines.append("")
+
     if db_details:
+        lines.append("### 3.2 涉密匹配详情")
+        lines.append("")
         lines.append(f"共发现 **{len(db_details)}** 处涉密匹配：")
         lines.append("")
         lines.append("| 序号 | 表名 | 字段 | 记录ID | 关键词 |")
@@ -136,7 +166,8 @@ def generate_report(results, keywords, output_dir=None):
             '.txt': 'TXT 文本', '.doc': 'DOC (旧版Word)',
             '.docx': 'DOCX (Word)', '.xls': 'XLS (旧版Excel)',
             '.xlsx': 'XLSX (Excel)', '.ppt': 'PPT (旧版PowerPoint)',
-            '.pptx': 'PPTX (PowerPoint)', '.pdf': 'PDF'
+            '.pptx': 'PPTX (PowerPoint)', '.pdf': 'PDF',
+            '.zip': 'ZIP 压缩包', '.rar': 'RAR 压缩包', '.7z': '7Z 压缩包'
         }
         for ext, count in sorted(type_counts.items()):
             name = type_names.get(ext, ext)
@@ -181,7 +212,7 @@ def generate_report(results, keywords, output_dir=None):
         for idx, d in enumerate(file_details, 1):
             file_short = (d['file'][:50] + "..."
                           if len(d['file']) > 50 else d['file'])
-            content_short = d['content'][:50].replace("|", "\\|")
+            content_short = _sanitize(d['content'])
             lines.append(f"| {idx} | {file_short} | {d['line_no']} | "
                          f"{d['file_type']} | {d['keyword']} | "
                          f"{content_short} |")
@@ -230,7 +261,7 @@ def generate_report(results, keywords, output_dir=None):
         for idx, d in enumerate(image_details, 1):
             dir_short = (d['directory'][:40] + "..."
                          if len(d['directory']) > 40 else d['directory'])
-            ocr_short = d['ocr_text'][:60].replace("|", "\\|")
+            ocr_short = _sanitize(d['ocr_text'], 60)
             lines.append(f"| {idx} | `{dir_short}` | "
                          f"{d['filename']} | {d['keyword']} | {ocr_short} |")
     else:

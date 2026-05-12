@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-文件检查模块 - 支持多种文档格式的涉密信息检查
-包含：TXT、DOC、DOCX、XLS、XLSX、PPT、PPTX、PDF
-功能：Magic Number校验、加密文件识别、异常不崩溃
+文件检查模块 - 支持多种文档格式和压缩包的涉密信息检查
+包含：TXT、DOC、DOCX、XLS、XLSX、PPT、PPTX、PDF、ZIP、RAR、7Z
+功能：Magic Number校验、加密文件识别、压缩包递归解压、多线程并行检查
 """
 
 import os
-import struct
+import tempfile
+import shutil
+import threading
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils import build_combined_pattern
 
@@ -21,56 +24,224 @@ MAGIC_NUMBERS = {
     '.pptx': [b'PK\x03\x04'],                                    # ZIP格式
     '.pdf':  [b'%PDF'],                                           # PDF格式
     '.txt':  None,  # TXT无固定Magic Number，不校验
+    '.zip':  [b'PK\x03\x04'],
+    '.rar':  [b'Rar!\x1a\x07'],
+    '.7z':   [b'7z\xbc\xaf\x27\x1c'],
 }
 
+ARCHIVE_EXTS = {'.zip', '.rar', '.7z'}
+DOC_EXTS = {'.doc', '.xls', '.ppt'}  # 需要 COM 接口的文件类型
+MAX_ARCHIVE_DEPTH = 3  # 压缩包最大嵌套深度
 
-def check_files(directory, keywords, log_callback=None):
+# COM 线程锁（WPS/Word COM 不是线程安全的）
+_com_lock = threading.Lock()
+
+
+# ==================== 压缩包处理 ====================
+
+def _is_archive(fpath):
+    """判断文件是否为支持的压缩包"""
+    ext = os.path.splitext(fpath)[1].lower()
+    if ext not in ARCHIVE_EXTS:
+        return False
+    try:
+        with open(fpath, 'rb') as f:
+            header = f.read(8)
+    except Exception:
+        return False
+    if ext == '.zip':
+        return header.startswith(b'PK\x03\x04')
+    if ext == '.rar':
+        return header.startswith(b'Rar!\x1a\x07')
+    if ext == '.7z':
+        return header.startswith(b'7z\xbc\xaf\x27\x1c')
+    return False
+
+
+def _extract_archive(fpath, extract_dir):
     """
-    递归扫描目录下所有支持的文件，检查涉密信息。
+    解压压缩包到指定目录。
+    返回解压出的文件路径列表。
+    """
+    ext = os.path.splitext(fpath)[1].lower()
+    extracted = []
+
+    try:
+        if ext == '.zip':
+            import zipfile
+            with zipfile.ZipFile(fpath, 'r') as zf:
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    # 跳过 macOS/Windows 系统文件
+                    basename = os.path.basename(info.filename)
+                    if basename.startswith('.') or basename.startswith('__'):
+                        continue
+                    target = os.path.join(extract_dir, info.filename)
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    with zf.open(info) as src, open(target, 'wb') as dst:
+                        dst.write(src.read())
+                    extracted.append(target)
+
+        elif ext == '.rar':
+            try:
+                import rarfile
+                with rarfile.RarFile(fpath) as rf:
+                    for info in rf.infolist():
+                        if info.is_dir():
+                            continue
+                        basename = os.path.basename(info.filename)
+                        if basename.startswith('.'):
+                            continue
+                        target = os.path.join(extract_dir, info.filename)
+                        os.makedirs(os.path.dirname(target), exist_ok=True)
+                        with rf.open(info) as src, open(target, 'wb') as dst:
+                            dst.write(src.read())
+                        extracted.append(target)
+            except ImportError:
+                pass
+
+        elif ext == '.7z':
+            try:
+                import py7zr
+                with py7zr.SevenZipFile(fpath, mode='r') as sz:
+                    sz.extractall(path=extract_dir)
+                # 收集解压出的文件
+                for root, dirs, fnames in os.walk(extract_dir):
+                    for fname in fnames:
+                        extracted.append(os.path.join(root, fname))
+            except ImportError:
+                pass
+
+    except Exception:
+        return []
+
+    return extracted
+
+
+def _check_archive(fpath, pattern, log_callback, depth, visited_archives):
+    """
+    解压并递归检查压缩包内的文件。
+
+    返回: (details, archive_count)
+    """
+    if depth > MAX_ARCHIVE_DEPTH:
+        if log_callback:
+            log_callback(f"  [文件] 压缩包嵌套过深，跳过: {fpath}")
+        return [], 0
+
+    if fpath in visited_archives:
+        return [], 0
+    visited_archives.add(fpath)
+
+    tmp_dir = tempfile.mkdtemp(prefix="checker_")
+    details = []
+    archive_count = 1
+
+    try:
+        extracted = _extract_archive(fpath, tmp_dir)
+        if not extracted:
+            if log_callback:
+                log_callback(f"  [文件] 压缩包解压失败或为空: {fpath}")
+            return [], 0
+
+        if log_callback:
+            log_callback(f"  [文件] 压缩包解压出 {len(extracted)} 个文件: {fpath}")
+
+        for epath in extracted:
+            ext = os.path.splitext(epath)[1].lower()
+
+            # 嵌套压缩包递归处理
+            if ext in ARCHIVE_EXTS and _is_archive(epath):
+                sub_details, sub_count = _check_archive(
+                    epath, pattern, log_callback, depth + 1, visited_archives)
+                details.extend(sub_details)
+                archive_count += sub_count
+                continue
+
+            # 普通文件：检查内容
+            if ext not in MAGIC_NUMBERS:
+                continue
+
+            try:
+                file_text = _extract_text(epath, ext)
+                if file_text is None:
+                    continue
+                if file_text.startswith("[") and "加密" in file_text:
+                    continue
+
+                lines = file_text.split("\n")
+                for i, line in enumerate(lines, 1):
+                    line_stripped = line.strip()
+                    if not line_stripped:
+                        continue
+                    for m in pattern.finditer(line_stripped):
+                        details.append({
+                            "file": fpath,
+                            "line_no": i,
+                            "content": line_stripped[:120],
+                            "keyword": m.group(),
+                            "file_type": f"[压缩包内{ext}]"
+                        })
+            except Exception:
+                pass
+
+    finally:
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    return details, archive_count
+
+
+# ==================== 主检查函数 ====================
+
+def check_files(directory, keywords, log_callback=None, max_workers=6):
+    """
+    递归扫描目录下所有支持的文件和压缩包，多线程并行检查涉密信息。
 
     参数:
-        directory:  扫描目录路径
-        keywords:   关键词列表
+        directory:    扫描目录路径
+        keywords:     关键词列表
         log_callback: 日志回调函数（可选）
+        max_workers:  并行线程数（默认6）
 
     返回:
         dict: {
             "total_files": 扫描文件总数,
             "supported_files": 支持格式文件数,
             "matched_files": 涉密文件数,
+            "archives_scanned": 扫描压缩包数,
+            "type_counts": {ext: count},
+            "encrypted_files": [路径],
+            "hidden_files": [路径],
             "details": [{file, line_no, content, keyword, file_type}, ...]
         }
     """
     pattern = build_combined_pattern(keywords)
+    empty_result = {
+        "total_files": 0, "supported_files": 0, "matched_files": 0,
+        "type_counts": {}, "encrypted_files": [], "hidden_files": [],
+        "archives_scanned": 0, "details": []
+    }
     if not pattern:
-        return {"total_files": 0, "supported_files": 0,
-                "matched_files": 0, "type_counts": {},
-                "encrypted_files": [], "hidden_files": [],
-                "details": []}
-
+        return empty_result
     if not os.path.isdir(directory):
         if log_callback:
             log_callback(f"  [文件] 目录不存在: {directory}")
-        return {"total_files": 0, "supported_files": 0,
-                "matched_files": 0, "type_counts": {},
-                "encrypted_files": [], "hidden_files": [],
-                "details": []}
+        return empty_result
 
-    total_files = 0
-    supported_files = 0
-    matched_files = set()
-    details = []
-    type_counts = Counter()       # 各类型文件计数
-    encrypted_files = []          # 加密文件列表
-    hidden_files = []             # 隐藏文件列表
+    # ========== 阶段一：收集所有文件 ==========
+    all_files = []
+    hidden_files = []
 
     for root, dirs, files in os.walk(directory):
         for fname in files:
-            total_files += 1
             fpath = os.path.join(root, fname)
             ext = os.path.splitext(fname)[1].lower()
 
-            # 检测隐藏文件（Windows: FILE_ATTRIBUTE_HIDDEN = 0x02）
+            # 检测隐藏文件
             try:
                 import ctypes
                 attrs = ctypes.windll.kernel32.GetFileAttributesW(fpath)
@@ -81,80 +252,145 @@ def check_files(directory, keywords, log_callback=None):
             except Exception:
                 pass
 
-            if ext not in MAGIC_NUMBERS:
-                continue
+            # 收集支持的普通文件
+            if ext in MAGIC_NUMBERS and ext not in ARCHIVE_EXTS:
+                all_files.append((fpath, ext, False))
+            # 收集压缩包
+            elif ext in ARCHIVE_EXTS:
+                all_files.append((fpath, ext, True))
 
-            supported_files += 1
-            type_counts[ext] += 1
+    total_files = len([f for f in all_files if not f[2]])
+    archive_files = [f for f in all_files if f[2]]
 
+    if log_callback:
+        log_callback(f"  [文件] 收集完成: {total_files} 个普通文件, "
+                     f"{len(archive_files)} 个压缩包")
+
+    # ========== 阶段二：先处理压缩包（顺序，因为涉及临时目录） ==========
+    matched_files = set()
+    details = []
+    type_counts = Counter()
+    encrypted_files = []
+    archives_scanned = 0
+    visited_archives = set()
+
+    for fpath, ext, _ in archive_files:
+        archives_scanned += 1
+        if log_callback:
+            log_callback(f"  [文件] 正在解压检查压缩包: {fpath}")
+
+        archive_details, _ = _check_archive(
+            fpath, pattern, log_callback, 0, visited_archives)
+        for d in archive_details:
+            matched_files.add(d["file"])
+        details.extend(archive_details)
+
+    # ========== 阶段三：多线程并行检查普通文件 ==========
+    def process_one_file(fpath, ext):
+        """处理单个文件，返回 (result_type, data)"""
+        result_type = "normal"
+        data = {
+            "file": fpath,
+            "ext": ext,
+            "matched": False,
+            "encrypted": False,
+            "details": []
+        }
+
+        if log_callback:
+            log_callback(f"  [文件] 正在检查: {fpath}")
+
+        # Magic Number 校验
+        real_ext = _check_magic_number(fpath, ext)
+        if real_ext != ext:
             if log_callback:
-                log_callback(f"  [文件] 正在检查: {fpath}")
+                log_callback(f"  [文件] 类型不匹配: {os.path.basename(fpath)} "
+                             f"(扩展名{ext}, 实际{real_ext})")
 
-            # Magic Number校验真实类型
-            real_ext = _check_magic_number(fpath, ext)
-            if real_ext != ext:
-                if log_callback:
-                    log_callback(f"  [文件] 类型不匹配: {fname} "
-                                 f"(扩展名{ext}, 实际{real_ext})")
-
-            # 读取文件内容并检查
-            try:
+        # 提取文本（COM 操作加锁）
+        if ext in DOC_EXTS:
+            with _com_lock:
                 file_text = _extract_text(fpath, ext)
-                if file_text is None:
-                    encrypted_files.append(fpath)
-                    if log_callback:
-                        log_callback(f"  [文件] 无法读取或已加密: {fpath}")
-                    continue
+        else:
+            file_text = _extract_text(fpath, ext)
 
-                # 检查提取结果是否为加密标记
-                if file_text.startswith("[") and "加密" in file_text:
-                    encrypted_files.append(fpath)
-                    if log_callback:
-                        log_callback(f"  [文件] 已加密: {fpath}")
-                    continue
+        if file_text is None:
+            data["encrypted"] = True
+            return result_type, data
 
-                lines = file_text.split("\n")
-                for i, line in enumerate(lines, 1):
-                    line_stripped = line.strip()
-                    if not line_stripped:
-                        continue
-                    matches = pattern.finditer(line_stripped)
-                    for m in matches:
-                        matched_files.add(fpath)
-                        details.append({
-                            "file": fpath,
-                            "line_no": i,
-                            "content": line_stripped[:120],
-                            "keyword": m.group(),
-                            "file_type": ext
-                        })
+        if file_text.startswith("[") and "加密" in file_text:
+            data["encrypted"] = True
+            return result_type, data
+
+        # 检查关键词
+        lines = file_text.split("\n")
+        file_details = []
+        for i, line in enumerate(lines, 1):
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+            for m in pattern.finditer(line_stripped):
+                file_details.append({
+                    "file": fpath,
+                    "line_no": i,
+                    "content": line_stripped[:120],
+                    "keyword": m.group(),
+                    "file_type": ext
+                })
+
+        if file_details:
+            data["matched"] = True
+            data["details"] = file_details
+
+        return result_type, data
+
+    if log_callback:
+        normal_count = len([f for f in all_files if not f[2]])
+        log_callback(f"  [文件] 开始并行检查 {normal_count} 个文件 (线程{max_workers})")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {}
+        for fpath, ext, is_archive in all_files:
+            if not is_archive:
+                futures[executor.submit(process_one_file, fpath, ext)] = fpath
+
+        for future in as_completed(futures):
+            try:
+                _, data = future.result()
+                if data["encrypted"]:
+                    encrypted_files.append(data["file"])
+                    if log_callback:
+                        log_callback(f"  [文件] 无法读取或已加密: {data['file']}")
+                elif data["matched"]:
+                    matched_files.add(data["file"])
+                    details.extend(data["details"])
+                type_counts[data["ext"]] += 1
             except Exception as e:
                 if log_callback:
-                    log_callback(f"  [文件] 处理异常: {fpath} - {e}")
+                    log_callback(f"  [文件] 处理异常: {futures[future]} - {e}")
 
     return {
         "total_files": total_files,
-        "supported_files": supported_files,
+        "supported_files": total_files,
         "matched_files": len(matched_files),
         "type_counts": dict(type_counts),
         "encrypted_files": encrypted_files,
         "hidden_files": hidden_files,
+        "archives_scanned": archives_scanned,
         "details": details
     }
 
 
+# ==================== 辅助函数 ====================
+
 def _check_magic_number(fpath, expected_ext):
-    """
-    通过文件头Magic Number校验文件真实类型。
-    返回实际检测到的扩展名，无法识别则返回原扩展名。
-    """
+    """通过文件头Magic Number校验文件真实类型"""
     try:
         with open(fpath, 'rb') as f:
             header = f.read(16)
     except Exception:
         return expected_ext
 
-    # ZIP格式：可能是docx/xlsx/pptx
     if header.startswith(b'PK\x03\x04'):
         try:
             import zipfile
@@ -169,13 +405,11 @@ def _check_magic_number(fpath, expected_ext):
                         return '.pptx'
         except Exception:
             pass
-        return '.docx'  # 默认
+        return '.docx'
 
-    # OLE2格式：可能是doc/xls/ppt
     if header.startswith(b'\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1'):
-        return expected_ext  # 无法精确区分，返回原扩展名
+        return expected_ext
 
-    # PDF格式
     if header.startswith(b'%PDF'):
         return '.pdf'
 
@@ -183,10 +417,7 @@ def _check_magic_number(fpath, expected_ext):
 
 
 def _extract_text(fpath, ext):
-    """
-    根据文件类型提取文本内容。
-    返回提取的文本字符串，无法读取返回None。
-    """
+    """根据文件类型提取文本内容"""
     extractors = {
         '.txt': _extract_txt,
         '.doc': _extract_doc,
@@ -204,7 +435,6 @@ def _extract_text(fpath, ext):
 
 
 def _extract_txt(fpath):
-    """提取TXT文件文本"""
     for enc in ('utf-8', 'gbk', 'gb2312', 'latin-1'):
         try:
             with open(fpath, 'r', encoding=enc) as f:
@@ -215,23 +445,15 @@ def _extract_txt(fpath):
 
 
 def _extract_doc(fpath):
-    """
-    提取旧版DOC文件文本（OLE2格式）。
-    使用 WPS/Word COM 接口，严格按实验文档要求：
-      - pythoncom.CoInitialize() 初始化COM
-      - WPS 预启动
-    """
-    # 方案一：通过 WPS/Word COM 接口读取（Windows环境推荐）
+    """提取旧版DOC文件文本（OLE2格式），使用 WPS/Word COM 接口"""
     try:
         import pythoncom
         import win32com.client
 
         pythoncom.CoInitialize()
-
         app = None
         doc = None
         try:
-            # 优先尝试 WPS，其次 Microsoft Word
             for prog_id in ("KWps.Application", "WPS.Application",
                             "Word.Application", "et.Application"):
                 try:
@@ -246,19 +468,14 @@ def _extract_doc(fpath):
             if app is None:
                 return None
 
-            # 以只读方式打开文档
             abs_path = os.path.abspath(fpath)
             doc = app.Documents.Open(abs_path, ReadOnly=True,
                                      PasswordDocument="",
                                      PasswordTemplate="",
                                      NoEncodingDialog=True)
-
-            # 提取全文文本
             full_text = doc.Content.Text
             return full_text if full_text else None
-
         finally:
-            # 确保释放COM资源
             if doc is not None:
                 try:
                     doc.Close(SaveChanges=False)
@@ -270,18 +487,15 @@ def _extract_doc(fpath):
                 except Exception:
                     pass
             pythoncom.CoUninitialize()
-
     except ImportError:
-        pass  # 未安装 pywin32，跳到备用方案
+        pass
     except Exception:
-        pass  # COM调用异常，跳到备用方案
+        pass
 
-    # 方案二：使用 olefile 检测文件是否为加密文件（辅助判断）
     try:
         import olefile
         if olefile.isOleFile(fpath):
             ole = olefile.OleFileIO(fpath)
-            # 检查是否为加密文件（Word文档加密时会写入 EncryptionInfo 流）
             is_encrypted = ole.exists('EncryptionInfo')
             ole.close()
             if is_encrypted:
@@ -289,24 +503,17 @@ def _extract_doc(fpath):
     except Exception:
         pass
 
-    # 方案三：二进制暴力提取可打印字符（兜底方案）
     try:
         with open(fpath, 'rb') as f:
             raw = f.read()
-        # 提取连续的可打印ASCII和中文GBK字符片段
         import re
-        # 匹配连续中文字符（GBK编码：高位0xB0-0xF7，低位0xA1-0xFE）
-        # 以及连续可打印ASCII
         text_parts = []
-        # 方法：按字节扫描，提取GBK中文片段
         i = 0
         while i < len(raw):
             b = raw[i]
-            # GBK中文双字节
             if 0xB0 <= b <= 0xF7 and i + 1 < len(raw):
                 b2 = raw[i + 1]
                 if 0xA1 <= b2 <= 0xFE:
-                    # 连续GBK字符
                     start = i
                     while i < len(raw) - 1:
                         b = raw[i]
@@ -322,7 +529,6 @@ def _extract_doc(fpath):
                     except Exception:
                         pass
                     continue
-            # ASCII可打印字符
             if 0x20 <= b <= 0x7E:
                 start = i
                 while i < len(raw) and 0x20 <= raw[i] <= 0x7E:
@@ -332,7 +538,6 @@ def _extract_doc(fpath):
                     text_parts.append(segment)
                 continue
             i += 1
-
         result = "\n".join(text_parts)
         return result if result else None
     except Exception:
@@ -340,12 +545,10 @@ def _extract_doc(fpath):
 
 
 def _extract_docx(fpath):
-    """提取DOCX文件文本"""
     try:
         from docx import Document
         doc = Document(fpath)
         paragraphs = [p.text for p in doc.paragraphs]
-        # 同时提取表格内容
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
@@ -356,7 +559,6 @@ def _extract_docx(fpath):
 
 
 def _extract_xls(fpath):
-    """提取旧版XLS文件文本"""
     try:
         import xlrd
         wb = xlrd.open_workbook(fpath)
@@ -372,7 +574,6 @@ def _extract_xls(fpath):
 
 
 def _extract_xlsx(fpath):
-    """提取XLSX文件文本"""
     try:
         from openpyxl import load_workbook
         wb = load_workbook(fpath, data_only=True)
@@ -388,16 +589,11 @@ def _extract_xlsx(fpath):
 
 
 def _extract_ppt(fpath):
-    """
-    提取旧版PPT文件文本（OLE2格式）。
-    同DOC，使用 WPS/Word COM 接口读取。
-    """
     try:
         import pythoncom
         import win32com.client
 
         pythoncom.CoInitialize()
-
         app = None
         pres = None
         try:
@@ -417,7 +613,6 @@ def _extract_ppt(fpath):
             abs_path = os.path.abspath(fpath)
             pres = app.Presentations.Open(abs_path, ReadOnly=True,
                                           WithWindow=False)
-
             texts = []
             for slide in pres.Slides:
                 for shape in slide.Shapes:
@@ -428,9 +623,7 @@ def _extract_ppt(fpath):
                             for cell in row.Cells:
                                 texts.append(cell.Shape.TextFrame
                                              .TextRange.Text)
-
             return "\n".join(texts) if texts else None
-
         finally:
             if pres is not None:
                 try:
@@ -443,17 +636,14 @@ def _extract_ppt(fpath):
                 except Exception:
                     pass
             pythoncom.CoUninitialize()
-
     except ImportError:
         pass
     except Exception:
         pass
-
     return None
 
 
 def _extract_pptx(fpath):
-    """提取PPTX文件文本"""
     try:
         from pptx import Presentation
         prs = Presentation(fpath)
@@ -473,14 +663,13 @@ def _extract_pptx(fpath):
 
 
 def _extract_pdf(fpath):
-    """提取PDF文件文本"""
     try:
         import PyPDF2
         texts = []
         with open(fpath, 'rb') as f:
             reader = PyPDF2.PdfReader(f)
             if reader.is_encrypted:
-                return None  # 加密文件
+                return None
             for page in reader.pages:
                 text = page.extract_text()
                 if text:
@@ -489,7 +678,6 @@ def _extract_pdf(fpath):
     except Exception:
         pass
 
-    # 备用方案：pdfplumber
     try:
         import pdfplumber
         texts = []
