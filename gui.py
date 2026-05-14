@@ -533,13 +533,20 @@ class App:
                     self.results["file"] = result
                     self._completed_modules.add("file")
                     self._update_progress(80)
-                    archive_info = ""
+                    extra_info = []
                     arch_count = result.get('archives_scanned', 0)
                     if arch_count:
-                        archive_info = f", 压缩包{arch_count}个"
+                        extra_info.append(f"压缩包{arch_count}个")
+                    enc_count = len(result.get('encrypted_files', []))
+                    if enc_count:
+                        extra_info.append(f"加密{enc_count}个")
+                    dmg_count = len(result.get('damaged_files', []))
+                    if dmg_count:
+                        extra_info.append(f"损坏{dmg_count}个")
+                    extra_str = f", {', '.join(extra_info)}" if extra_info else ""
                     self.log_queue.put(("SUCCESS",
                                         f"  文件检查完成: {result['supported_files']} 个文件, "
-                                        f"{result['matched_files']} 个涉密{archive_info}"))
+                                        f"{result['matched_files']} 个涉密{extra_str}"))
 
             # ---------- 4. 图片检查 ----------
             current_step += 1

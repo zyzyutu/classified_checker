@@ -56,6 +56,16 @@ def save_results(results, keywords, results_path):
                 "matches": []
             }
 
+    # 损坏文件单独记录
+    for fpath in file_result.get("damaged_files", []):
+        if fpath not in data["files"]:
+            data["files"][fpath] = {
+                "checked_at": now,
+                "matched": False,
+                "status": "damaged",
+                "matches": []
+            }
+
     # 隐藏文件单独记录
     for fpath in file_result.get("hidden_files", []):
         if fpath not in data["files"]:
@@ -154,10 +164,12 @@ def format_history_summary(data):
     files = data.get("files", {})
     matched_files = {k: v for k, v in files.items() if v.get("matched")}
     encrypted = {k: v for k, v in files.items() if v.get("status") == "encrypted"}
+    damaged = {k: v for k, v in files.items() if v.get("status") == "damaged"}
     hidden = {k: v for k, v in files.items() if v.get("status") == "hidden"}
     lines.append(f"文件检查: {len(files)} 个文件, "
                  f"{len(matched_files)} 个涉密, "
                  f"{len(encrypted)} 个加密, "
+                 f"{len(damaged)} 个损坏, "
                  f"{len(hidden)} 个隐藏")
 
     # 图片统计

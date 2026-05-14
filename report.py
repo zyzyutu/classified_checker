@@ -78,13 +78,17 @@ def generate_report(results, keywords, output_dir=None):
     lines.append(f"| 数据库检查 | {db.get('total_records', 0)} 条记录 | "
                  f"{db.get('matched_tables', 0)} 个表 | - |")
     enc_count = len(file.get("encrypted_files", []))
+    dmg_count = len(file.get("damaged_files", []))
     hid_count = len(file.get("hidden_files", []))
     arch_count = file.get("archives_scanned", 0)
+    enc_arch = len(file.get("encrypted_archives", []))
     file_note = []
     if arch_count:
         file_note.append(f"压缩包{arch_count}个")
     if enc_count:
         file_note.append(f"加密{enc_count}个")
+    if dmg_count:
+        file_note.append(f"损坏{dmg_count}个")
     if hid_count:
         file_note.append(f"隐藏{hid_count}个")
     lines.append(f"| 文件检查 | {file.get('supported_files', 0)} 个文件 | "
@@ -179,7 +183,7 @@ def generate_report(results, keywords, output_dir=None):
     lines.append("### 4.2 加密文件")
     lines.append("")
     if encrypted_files:
-        lines.append(f"共发现 **{len(encrypted_files)}** 个加密或无法读取的文件：")
+        lines.append(f"共发现 **{len(encrypted_files)}** 个加密文件：")
         lines.append("")
         for idx, fpath in enumerate(encrypted_files, 1):
             lines.append(f"{idx}. `{fpath}`")
@@ -187,9 +191,22 @@ def generate_report(results, keywords, output_dir=None):
         lines.append("未发现加密文件。")
     lines.append("")
 
+    # 损坏文件
+    damaged_files = file.get("damaged_files", [])
+    lines.append("### 4.3 损坏文件")
+    lines.append("")
+    if damaged_files:
+        lines.append(f"共发现 **{len(damaged_files)}** 个损坏或格式异常的文件：")
+        lines.append("")
+        for idx, fpath in enumerate(damaged_files, 1):
+            lines.append(f"{idx}. `{fpath}`")
+    else:
+        lines.append("未发现损坏文件。")
+    lines.append("")
+
     # 隐藏文件
     hidden_files = file.get("hidden_files", [])
-    lines.append("### 4.3 隐藏文件")
+    lines.append("### 4.4 隐藏文件")
     lines.append("")
     if hidden_files:
         lines.append(f"共发现 **{len(hidden_files)}** 个隐藏文件：")
@@ -201,7 +218,7 @@ def generate_report(results, keywords, output_dir=None):
     lines.append("")
 
     # 涉密文件匹配详情
-    lines.append("### 4.4 涉密匹配详情")
+    lines.append("### 4.5 涉密匹配详情")
     lines.append("")
     file_details = file.get("details", [])
     if file_details:
