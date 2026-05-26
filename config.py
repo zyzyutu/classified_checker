@@ -3,6 +3,8 @@
 配置模块 - 集中管理所有默认路径、关键词和系统常量
 """
 
+import os
+
 # ========== 默认路径（严格按实验文档） ==========
 DOC_DIR = r"F:\保密技术检查\document"
 IMG_DIR = r"F:\保密技术检查\image"
@@ -10,7 +12,7 @@ IMG_DIR = r"F:\保密技术检查\image"
 # ========== MySQL 数据库连接配置 ==========
 DB_HOST = "localhost"
 DB_USER = "root"
-DB_PASSWORD = "521581"
+DB_PASSWORD = os.environ.get("CLASSIFIED_CHECKER_DB_PASS", "521581")
 DB_NAME = "baomi"
 
 # ========== 默认关键词（严格按实验文档） ==========

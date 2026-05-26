@@ -294,31 +294,43 @@ def check_files(directory, keywords, log_callback=None, max_workers=6):
         log_callback(f"  [文件] 收集完成: {total_files} 个普通文件, "
                      f"{len(archive_files)} 个压缩包")
 
-    # ========== 阶段二：先处理压缩包（顺序，因为涉及临时目录） ==========
+    # ========== 阶段二：多线程并行处理压缩包 ==========
     matched_files = set()
     details = []
     type_counts = Counter()
     encrypted_files = []
     damaged_files = []
-    archives_scanned = 0
+    archives_scanned = len(archive_files)
     encrypted_archives = []
     visited_archives = set()
 
-    for fpath, ext, _ in archive_files:
-        archives_scanned += 1
+    if archive_files:
         if log_callback:
-            log_callback(f"  [文件] 正在解压检查压缩包: {fpath}")
+            log_callback(f"  [文件] 并行解压 {len(archive_files)} 个压缩包")
 
-        archive_details, archive_encrypted = _check_archive(
-            fpath, pattern, log_callback, 0, visited_archives)
-        if archive_encrypted:
-            encrypted_archives.append(fpath)
-            encrypted_files.append(fpath)
-            if log_callback:
-                log_callback(f"  [文件] 压缩包需要密码: {fpath}")
-        for d in archive_details:
-            matched_files.add(d["file"])
-        details.extend(archive_details)
+        def process_archive(item):
+            fpath, ext, _ = item
+            archive_details, archive_encrypted = _check_archive(
+                fpath, pattern, log_callback, 0, visited_archives)
+            return fpath, archive_details, archive_encrypted
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(process_archive, item): item
+                       for item in archive_files}
+            for future in as_completed(futures):
+                try:
+                    fpath, archive_details, archive_encrypted = future.result()
+                    if archive_encrypted:
+                        encrypted_archives.append(fpath)
+                        encrypted_files.append(fpath)
+                        if log_callback:
+                            log_callback(f"  [文件] 压缩包需要密码: {fpath}")
+                    for d in archive_details:
+                        matched_files.add(d["file"])
+                    details.extend(archive_details)
+                except Exception as e:
+                    if log_callback:
+                        log_callback(f"  [文件] 压缩包处理异常: {futures[future][0]} - {e}")
 
     # ========== 阶段三：多线程并行检查普通文件 ==========
     def process_one_file(fpath, ext):
@@ -333,9 +345,6 @@ def check_files(directory, keywords, log_callback=None, max_workers=6):
             "status_msg": "",
             "details": []
         }
-
-        if log_callback:
-            log_callback(f"  [文件] 正在检查: {fpath}")
 
         # Magic Number 校验
         real_ext = _check_magic_number(fpath, ext)
@@ -381,6 +390,10 @@ def check_files(directory, keywords, log_callback=None, max_workers=6):
 
         if file_text.startswith("[") and "损坏" in file_text:
             data["damaged"] = True
+            data["status_msg"] = file_text.strip("[]")
+            return result_type, data
+
+        if file_text.startswith("[") and "缺少" in file_text:
             data["status_msg"] = file_text.strip("[]")
             return result_type, data
 
@@ -491,17 +504,23 @@ def _diagnose_extract_failure(fpath, ext):
                         return "encrypted"
             return "damaged"
 
-        elif ext == '.xls':
+        elif ext in ('.ppt', '.doc', '.xls'):
+            # 旧版 OLE2 格式：用 olefile 检查加密标志
             try:
-                import xlrd
-                xlrd.open_workbook(fpath)
-            except xlrd.XLRDError as e:
-                if "password" in str(e).lower() or "encrypt" in str(e).lower():
+                import olefile
+                if not olefile.isOleFile(fpath):
+                    return "damaged"
+                ole = olefile.OleFileIO(fpath)
+                is_encrypted = ole.exists('EncryptionInfo')
+                ole.close()
+                if is_encrypted:
                     return "encrypted"
-                return "damaged"
+                # OLE2 有效且未加密 → COM 库缺失或环境问题
+                return "missing_lib"
             except ImportError:
                 return "missing_lib"
-            return "damaged"
+            except Exception:
+                return "damaged"
 
         elif ext == '.pdf':
             try:
@@ -728,58 +747,108 @@ def _extract_xlsx(fpath):
 
 
 def _extract_ppt(fpath):
+    """提取PPT文本 - 修复版本"""
+    import threading
+
+    # 获取线程局部存储的COM状态
+    _thread_local = threading.local()
+
     try:
         import pythoncom
         import win32com.client
 
-        pythoncom.CoInitialize()
+        # 为当前线程初始化COM（每个线程只初始化一次）
+        if not hasattr(_thread_local, 'com_initialized'):
+            pythoncom.CoInitialize()
+            _thread_local.com_initialized = True
+
         app = None
         pres = None
         try:
-            for prog_id in ("KWpp.Application", "WPP.Application",
+            # 尝试WPS，失败后尝试PowerPoint
+            for prog_id in ("KWps.Application", "WPP.Application",
                             "PowerPoint.Application"):
                 try:
-                    app = win32com.client.Dispatch(prog_id)
+                    app = win32com.client.dynamic.Dispatch(prog_id)
                     app.Visible = False
+                    # WPS特有的设置
+                    if hasattr(app, 'DisplayAlerts'):
+                        app.DisplayAlerts = False
                     break
                 except Exception:
+                    if app:
+                        try:
+                            app.Quit()
+                        except:
+                            pass
                     app = None
                     continue
 
             if app is None:
-                return None
+                return "[PPT文件-无法打开，请安装WPS或PowerPoint]"
 
             abs_path = os.path.abspath(fpath)
-            pres = app.Presentations.Open(abs_path, ReadOnly=True,
-                                          WithWindow=False)
+            # 设置超时，避免卡死
+            import time
+            start_time = time.time()
+
+            # 尝试打开文件，设置只读模式
+            try:
+                pres = app.Presentations.Open(abs_path, WithWindow=False,
+                                              ReadOnly=True)
+            except Exception as e:
+                if "被加密" in str(e) or "password" in str(e).lower():
+                    return "[PPT文件-已加密]"
+                raise
+
+            # 检查是否超时
+            if time.time() - start_time > 30:
+                return "[PPT文件-打开超时]"
+
             texts = []
+            # 提取幻灯片文本
             for slide in pres.Slides:
-                for shape in slide.Shapes:
-                    if shape.HasTextFrame:
-                        texts.append(shape.TextFrame.TextRange.Text)
-                    if shape.HasTable:
-                        for row in shape.Table.Rows:
-                            for cell in row.Cells:
-                                texts.append(cell.Shape.TextFrame
-                                             .TextRange.Text)
+                try:
+                    for shape in slide.Shapes:
+                        try:
+                            if shape.HasTextFrame:
+                                texts.append(shape.TextFrame.TextRange.Text)
+                            if hasattr(shape, 'HasTable') and shape.HasTable:
+                                for row in shape.Table.Rows:
+                                    for cell in row.Cells:
+                                        texts.append(
+                                            cell.Shape.TextFrame.TextRange.Text
+                                        )
+                        except:
+                            continue
+                except:
+                    continue
+
             return "\n".join(texts) if texts else None
+
+        except Exception as e:
+            error_msg = str(e)
+            if "加密" in error_msg or "password" in error_msg.lower():
+                return "[PPT文件-已加密]"
+            return f"[PPT文件-读取失败: {str(e)[:50]}]"
+
         finally:
+            # 确保释放资源
             if pres is not None:
                 try:
                     pres.Close()
-                except Exception:
+                except:
                     pass
             if app is not None:
                 try:
                     app.Quit()
-                except Exception:
+                except:
                     pass
-            pythoncom.CoUninitialize()
+
     except ImportError:
-        pass
-    except Exception:
-        pass
-    return None
+        return "[PPT文件-缺少win32com组件]"
+    except Exception as e:
+        return f"[PPT文件-异常: {str(e)[:50]}]"
 
 
 def _extract_pptx(fpath):

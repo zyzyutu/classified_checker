@@ -75,8 +75,11 @@ def generate_report(results, keywords, output_dir=None):
     lines.append(f"| 网页检查 | {web.get('total', 0)} 个页面 | "
                  f"{web.get('matched_pages', 0)} 个页面 | "
                  f"{', '.join(web_note_parts) if web_note_parts else '-'} |")
-    lines.append(f"| 数据库检查 | {db.get('total_records', 0)} 条记录 | "
-                 f"{db.get('matched_tables', 0)} 个表 | - |")
+    db_total = db.get('total_records', 0)
+    db_candidate = db.get('candidate_records', 0)
+    db_note = f"粗筛{db_candidate}条" if db_candidate else "-"
+    lines.append(f"| 数据库检查 | {db_total} 条记录 | "
+                 f"{db.get('matched_tables', 0)} 个表 | {db_note} |")
     enc_count = len(file.get("encrypted_files", []))
     dmg_count = len(file.get("damaged_files", []))
     hid_count = len(file.get("hidden_files", []))
@@ -132,11 +135,13 @@ def generate_report(results, keywords, output_dir=None):
     if table_stats:
         lines.append("### 3.1 各表统计")
         lines.append("")
-        lines.append("| 表名 | 记录总数 | 涉密记录数 | 字段数 |")
-        lines.append("|------|---------|-----------|-------|")
+        lines.append("| 表名 | 记录总数 | 涉密记录数 | 文本字段数 | 总字段数 |")
+        lines.append("|------|---------|-----------|----------|---------|")
         for tname, stat in table_stats.items():
+            text_cols = stat.get('text_columns', stat.get('columns', []))
             lines.append(f"| {tname} | {stat['total_records']} | "
-                         f"{stat['matched_records']} | {len(stat['columns'])} |")
+                         f"{stat['matched_records']} | "
+                         f"{len(text_cols)} | {len(stat['columns'])} |")
         lines.append("")
 
     if db_details:

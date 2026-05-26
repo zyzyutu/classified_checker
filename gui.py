@@ -503,8 +503,10 @@ class App:
                     self.results["db"] = result
                     self._completed_modules.add("db")
                     self._update_progress(50)
+                    candidate = result.get('candidate_records', 0)
+                    opt_info = f", 粗筛{candidate}条候选" if candidate else ""
                     self.log_queue.put(("SUCCESS",
-                                        f"  数据库检查完成: {result['total_records']} 条记录, "
+                                        f"  数据库检查完成: {result['total_records']} 条记录{opt_info}, "
                                         f"{result['matched_tables']} 个涉密表"))
 
             # ---------- 3. 文件检查 ----------
@@ -565,7 +567,8 @@ class App:
                 result = self._run_check_one(
                     "image",
                     lambda: check_images(img_dir_input, keywords,
-                                         log_callback=log_cb),
+                                         log_callback=log_cb,
+                                         max_workers=web_workers),
                     "图片检查", 85, 100)
                 if result is None:
                     stopped = True
