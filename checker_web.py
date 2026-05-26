@@ -41,12 +41,14 @@ def load_cache(cache_path):
 def save_cache(cache, cache_path):
     """写入缓存文件"""
     if not cache_path:
-        return
+        return False
     try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
         with open(cache_path, "w", encoding="utf-8") as f:
             json.dump(cache, f, ensure_ascii=False, indent=2)
+        return True
     except IOError:
-        pass
+        return False
 
 
 def _content_hash(html):
@@ -176,6 +178,8 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
 
     # 加载缓存
     cache = load_cache(cache_path) if incremental else {}
+    if log_callback:
+        log_callback(f"  [网页] incremental={incremental}, cache_path={cache_path}, 缓存条目={len(cache)}")
 
     parsed_base = urlparse(url)
     base_domain = parsed_base.netloc
@@ -217,11 +221,24 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
 
                 if status == "not_modified":
                     skipped += 1
+                    if log_callback:
+                        log_callback(f"  [网页] 跳过(未变化): {page_url}")
+                    # 跳过的页面也要提取链接，保证深度遍历不中断
+                    if depth < max_depth:
+                        cached_links = cache.get(page_url, {}).get("links", [])
+                        for link in cached_links:
+                            if link not in visited:
+                                visited.add(link)
+                                next_level.append(link)
                     continue
 
                 if html is not None:
                     pages_to_check.append((page_url, html))
                     # 更新缓存条目
+                    if log_callback:
+                        has_etag = bool(info.get("etag"))
+                        has_lm = bool(info.get("last_modified"))
+                        log_callback(f"  [网页] 获取页面: {page_url[:60]}... etag={has_etag} last_modified={has_lm}")
                     cache_entry = {
                         "content_hash": _content_hash(html),
                         "last_checked": datetime.now().isoformat()
@@ -252,6 +269,10 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
                 if details:
                     matched_urls.add(page_url)
 
+                # 保存链接到缓存（供下次增量时跳过的页面使用）
+                if page_url in cache and new_links:
+                    cache[page_url]["links"] = new_links
+
                 # 收集下一层链接（去重）
                 if depth < max_depth:
                     for link in new_links:
@@ -268,7 +289,12 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
 
     # 保存缓存
     if incremental:
-        save_cache(cache, cache_path)
+        success = save_cache(cache, cache_path)
+        if log_callback:
+            log_callback(f"  [网页] 保存缓存: {len(cache)} 条, 路径={cache_path}, 成功={success}")
+    else:
+        if log_callback:
+            log_callback(f"  [网页] 未启用增量检查，不保存缓存")
 
     return {
         "total": total,
