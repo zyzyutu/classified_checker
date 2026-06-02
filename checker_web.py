@@ -268,6 +268,9 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
                 all_details.extend(details)
                 if details:
                     matched_urls.add(page_url)
+                    # 标记缓存中该页面有涉密内容
+                    if page_url in cache:
+                        cache[page_url]["has_match"] = True
 
                 # 保存链接到缓存（供下次增量时跳过的页面使用）
                 if page_url in cache and new_links:
@@ -296,10 +299,18 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
         if log_callback:
             log_callback(f"  [网页] 未启用增量检查，不保存缓存")
 
+    # 收集缓存中已有涉密标记但本次跳过的 URL
+    cached_matched_urls = []
+    if incremental:
+        for url, entry in cache.items():
+            if entry.get("has_match") and url not in matched_urls:
+                cached_matched_urls.append(url)
+
     return {
         "total": total,
         "matched_pages": len(matched_urls),
         "skipped_pages": skipped,
         "new_pages": new_or_changed,
-        "details": all_details
+        "details": all_details,
+        "cached_matched_urls": cached_matched_urls
     }

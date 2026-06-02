@@ -5,7 +5,6 @@
 """
 
 import sys
-import os
 import tkinter as tk
 from tkinter import ttk  # 这里修复了
 from tkinter import messagebox

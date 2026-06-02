@@ -6,7 +6,6 @@ GUI界面模块 - 基于tkinter的图形化操作界面
 
 import os
 import re
-import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
@@ -403,10 +402,10 @@ class App:
         在守护线程中执行单个检查，支持立即停止。
         返回结果，被停止则返回 None。
         """
-        result_box = [None]
+        result_box = {}
 
         def target():
-            result_box[0] = func()
+            result_box["r"] = func()
 
         t = threading.Thread(target=target, daemon=True)
         t.start()
@@ -418,7 +417,7 @@ class App:
                 return None
             t.join(timeout=0.2)
 
-        return result_box[0]
+        return result_box.get("r")
 
     def _run_check(self, keywords):
         """子线程：执行全部检查任务，支持立即停止和断点续查"""
@@ -470,8 +469,11 @@ class App:
                     self._update_progress(25)
                     skip_info = ""
                     if web_incremental:
+                        cached_count = len(result.get("cached_matched_urls", []))
                         skip_info = (f", 跳过{result.get('skipped_pages', 0)}个未变化, "
                                      f"新增/更新{result.get('new_pages', 0)}个")
+                        if cached_count:
+                            skip_info += f", 缓存已有{cached_count}个涉密页"
                     self.log_queue.put(("SUCCESS",
                                         f"  网页检查完成: {result['total']} 个页面, "
                                         f"{result['matched_pages']} 个涉密{skip_info}"))

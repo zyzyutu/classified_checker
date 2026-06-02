@@ -41,11 +41,3 @@ def build_combined_pattern(keywords):
     return re.compile(combined, re.IGNORECASE)
 
 
-def search_text(text, pattern):
-    """
-    在文本中搜索匹配项，返回所有匹配位置列表。
-    每个元素: (match_start, match_end, matched_text)
-    """
-    if not pattern:
-        return []
-    return [(m.start(), m.end(), m.group()) for m in pattern.finditer(text)]

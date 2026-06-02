@@ -6,7 +6,7 @@
 import os
 from datetime import datetime
 
-from config import REPORT_DIR
+from config import REPORT_DIR, OCR_CONFIDENCE_THRESHOLD
 
 
 def _sanitize(text, max_len=50):
@@ -57,7 +57,7 @@ def generate_report(results, keywords, output_dir=None):
     image = results.get("image", {})
 
     total_matched = (
-        web.get("matched_pages", 0)
+        (web.get("matched_pages", 0) + len(web.get("cached_matched_urls", [])))
         + db.get("matched_tables", 0)
         + file.get("matched_files", 0)
         + image.get("matched_images", 0)
@@ -68,12 +68,14 @@ def generate_report(results, keywords, output_dir=None):
     web_note_parts = []
     skipped = web.get("skipped_pages", 0)
     new_pages = web.get("new_pages", 0)
+    cached_matched_count = len(web.get("cached_matched_urls", []))
     if skipped:
         web_note_parts.append(f"跳过{skipped}个")
     if new_pages:
         web_note_parts.append(f"新增/更新{new_pages}个")
+    web_matched_total = web.get('matched_pages', 0) + cached_matched_count
     lines.append(f"| 网页检查 | {web.get('total', 0)} 个页面 | "
-                 f"{web.get('matched_pages', 0)} 个页面 | "
+                 f"{web_matched_total} 个页面 | "
                  f"{', '.join(web_note_parts) if web_note_parts else '-'} |")
     db_total = db.get('total_records', 0)
     db_candidate = db.get('candidate_records', 0)
@@ -110,8 +112,9 @@ def generate_report(results, keywords, output_dir=None):
     lines.append("## 二、网页检查详情")
     lines.append("")
     web_details = web.get("details", [])
+    cached_matched = web.get("cached_matched_urls", [])
     if web_details:
-        lines.append(f"共发现 **{len(web_details)}** 处涉密匹配：")
+        lines.append(f"本次新发现 **{len(web_details)}** 处涉密匹配：")
         lines.append("")
         lines.append("| 序号 | URL | 行号 | 关键词 | 内容摘要 |")
         lines.append("|-----|-----|------|-------|---------|")
@@ -120,6 +123,13 @@ def generate_report(results, keywords, output_dir=None):
             content_short = _sanitize(d['content'])
             lines.append(f"| {idx} | {url_short} | {d['line_no']} | "
                          f"{d['keyword']} | {content_short} |")
+    elif cached_matched:
+        lines.append(f"本次检查无新增涉密内容。以下 **{len(cached_matched)}** 个页面"
+                     f"在上次检查中发现涉密内容（本次未变化，跳过检查）：")
+        lines.append("")
+        for idx, url in enumerate(sorted(cached_matched), 1):
+            url_short = url[:80] + "..." if len(url) > 80 else url
+            lines.append(f"{idx}. {url_short}")
     else:
         lines.append("未发现涉密内容。")
     lines.append("")
@@ -251,6 +261,7 @@ def generate_report(results, keywords, output_dir=None):
     # 图片类型统计
     img_type_counts = image.get("type_counts", {})
     lines.append(f"OCR引擎: **{image.get('ocr_engine', 'N/A')}**")
+    lines.append(f"置信度阈值: **{OCR_CONFIDENCE_THRESHOLD}**（低于此值的识别结果已过滤）")
     lines.append("")
     lines.append(f"共扫描图片: **{image.get('total_images', 0)}** 张")
     lines.append(f"涉密图片: **{image.get('matched_images', 0)}** 张")

@@ -24,6 +24,10 @@ WEB_MAX_DEPTH = 5
 WEB_MAX_WORKERS = 6
 WEB_CACHE_PATH = r"D:\Tools\Claude\classified_checker\web_cache.json"
 
+# ========== 图片检查配置 ==========
+IMG_CACHE_PATH = r"D:\Tools\Claude\classified_checker\img_cache.json"
+OCR_CONFIDENCE_THRESHOLD = 0.7   # OCR置信度阈值，低于此值的结果丢弃
+
 # ========== 支持的文件类型 ==========
 SUPPORTED_FILE_EXTS = {
     '.txt', '.doc', '.docx',
