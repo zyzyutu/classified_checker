@@ -299,10 +299,11 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
         if log_callback:
             log_callback(f"  [网页] 未启用增量检查，不保存缓存")
 
-    # 收集缓存中已有涉密标记但本次跳过的 URL
+    # 收集本次访问过的、缓存中已有涉密标记但本次未产生新匹配的 URL
     cached_matched_urls = []
     if incremental:
-        for url, entry in cache.items():
+        for url in visited:
+            entry = cache.get(url, {})
             if entry.get("has_match") and url not in matched_urls:
                 cached_matched_urls.append(url)
 
