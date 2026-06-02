@@ -174,7 +174,8 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
     pattern = build_combined_pattern(keywords)
     if not pattern:
         return {"total": 0, "matched_pages": 0,
-                "skipped_pages": 0, "new_pages": 0, "details": []}
+                "skipped_pages": 0, "new_pages": 0,
+                "details": [], "cached_matched_urls": []}
 
     # 加载缓存
     cache = load_cache(cache_path) if incremental else {}
@@ -187,6 +188,7 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
     visited = set()
     all_details = []
     matched_urls = set()
+    skipped_matched = set()   # 本次跳过但缓存标记为涉密的 URL
     total = 0
     skipped = 0
     new_or_changed = 0
@@ -223,6 +225,9 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
                     skipped += 1
                     if log_callback:
                         log_callback(f"  [网页] 跳过(未变化): {page_url}")
+                    # 检查跳过的页面是否在缓存中标记为涉密
+                    if cache.get(page_url, {}).get("has_match"):
+                        skipped_matched.add(page_url)
                     # 跳过的页面也要提取链接，保证深度遍历不中断
                     if depth < max_depth:
                         cached_links = cache.get(page_url, {}).get("links", [])
@@ -299,12 +304,11 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
         if log_callback:
             log_callback(f"  [网页] 未启用增量检查，不保存缓存")
 
-    # 收集本次访问过的、缓存中已有涉密标记但本次未产生新匹配的 URL
+    # 本次跳过但缓存标记为涉密的 URL（排除本次有新匹配的）
     cached_matched_urls = []
     if incremental:
-        for url in visited:
-            entry = cache.get(url, {})
-            if entry.get("has_match") and url not in matched_urls:
+        for url in skipped_matched:
+            if url not in matched_urls:
                 cached_matched_urls.append(url)
 
     return {

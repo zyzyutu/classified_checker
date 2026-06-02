@@ -8,6 +8,7 @@
 import hashlib
 import json
 import os
+import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -92,6 +93,7 @@ def check_images(directory, keywords, log_callback=None, max_workers=4):
     # 加载图片OCR缓存
     img_cache = _load_img_cache(IMG_CACHE_PATH)
     cached_hits = 0
+    _cache_lock = threading.Lock()
 
     # ========== 阶段一：收集所有图片 ==========
     image_files = []
@@ -126,36 +128,50 @@ def check_images(directory, keywords, log_callback=None, max_workers=4):
 
         # 计算文件MD5，查缓存
         md5 = _file_md5(fpath)
-        if md5 in img_cache:
-            cached_hits += 1
-            ocr_text = img_cache[md5].get("ocr_text", "")
-        else:
+        with _cache_lock:
+            if md5 in img_cache:
+                ocr_items = img_cache[md5].get("ocr_items")
+                if ocr_items is not None:
+                    cached_hits += 1
+                else:
+                    ocr_items = None  # 旧缓存格式，需要重新识别
+            else:
+                ocr_items = None
+
+        if ocr_items is None:
             # 缓存未命中，执行OCR
             try:
-                ocr_text = ocr_func(fpath)
-                if ocr_text:
-                    img_cache[md5] = {"ocr_text": ocr_text}
+                ocr_items = ocr_func(fpath)
+                if ocr_items:
+                    with _cache_lock:
+                        img_cache[md5] = {"ocr_items": ocr_items}
             except Exception as e:
                 if log_callback:
                     log_callback(f"  [图片] OCR异常: {fname} - {e}")
                 return []
 
-        if not ocr_text:
+        if not ocr_items:
             return []
 
+        # 置信度过滤 + 关键词匹配
         image_details = []
-        for line in ocr_text.split("\n"):
-            line_stripped = line.strip()
-            if not line_stripped:
+        for item in ocr_items:
+            text = item[0]
+            confidence = item[1]
+            if confidence < OCR_CONFIDENCE_THRESHOLD:
                 continue
-            for m in pattern.finditer(line_stripped):
-                image_details.append({
-                    "file": fpath,
-                    "directory": root,
-                    "filename": fname,
-                    "keyword": m.group(),
-                    "ocr_text": line_stripped[:150]
-                })
+            for line in text.split("\n"):
+                line_stripped = line.strip()
+                if not line_stripped:
+                    continue
+                for m in pattern.finditer(line_stripped):
+                    image_details.append({
+                        "file": fpath,
+                        "directory": root,
+                        "filename": fname,
+                        "keyword": m.group(),
+                        "ocr_text": line_stripped[:150]
+                    })
         return image_details
 
     if log_callback:
@@ -219,17 +235,11 @@ def _init_ocr(log_callback=None):
             ocr_label = "RapidOCR (CPU)"
 
         def rapid_ocr_func(img_path):
+            """返回 [(文本, 置信度), ...] 列表，不做过滤"""
             result, _ = engine(img_path)
             if not result:
-                return ""
-            # 过滤低置信度结果
-            filtered = []
-            for item in result:
-                text = item[1]       # 识别文本
-                confidence = item[2]  # 置信度
-                if confidence >= OCR_CONFIDENCE_THRESHOLD:
-                    filtered.append(text)
-            return "\n".join(filtered)
+                return []
+            return [(item[1], item[2]) for item in result]
 
         if log_callback:
             log_callback(f"  [图片] OCR引擎: {ocr_label}")
@@ -247,19 +257,20 @@ def _init_ocr(log_callback=None):
         from PIL import Image
 
         def tesseract_ocr_func(img_path):
+            """返回 [(文本, 置信度), ...] 列表，不做过滤"""
             img = Image.open(img_path)
             try:
                 data = pytesseract.image_to_data(img, lang="chi_sim",
                                                   output_type=pytesseract.Output.DICT)
             except Exception:
                 data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
-            # 按行聚合，过滤低置信度
-            filtered = []
+            # 按行聚合，返回 (文本, 置信度) 对
+            results = []
             for i, text in enumerate(data["text"]):
                 conf = float(data["conf"][i]) / 100.0  # pytesseract 返回 0~100
-                if text.strip() and conf >= OCR_CONFIDENCE_THRESHOLD:
-                    filtered.append(text.strip())
-            return "\n".join(filtered)
+                if text.strip():
+                    results.append((text.strip(), conf))
+            return results
 
         # 验证 tesseract 可执行文件是否存在
         pytesseract.get_tesseract_version()
