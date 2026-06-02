@@ -225,9 +225,14 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
                     skipped += 1
                     if log_callback:
                         log_callback(f"  [网页] 跳过(未变化): {page_url}")
-                    # 检查跳过的页面是否在缓存中标记为涉密
-                    if cache.get(page_url, {}).get("has_match"):
+                    # 跳过的页面：如果有缓存匹配详情，加入跳过匹配集合
+                    cached_details = cache.get(page_url, {}).get("cached_details", [])
+                    if cached_details:
                         skipped_matched.add(page_url)
+                        for d in cached_details:
+                            d_copy = dict(d)
+                            d_copy["from_cache"] = True
+                            all_details.append(d_copy)
                     # 跳过的页面也要提取链接，保证深度遍历不中断
                     if depth < max_depth:
                         cached_links = cache.get(page_url, {}).get("links", [])
@@ -273,9 +278,9 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
                 all_details.extend(details)
                 if details:
                     matched_urls.add(page_url)
-                    # 标记缓存中该页面有涉密内容
-                    if page_url in cache:
-                        cache[page_url]["has_match"] = True
+                # 保存匹配详情到缓存（供增量模式跳过时使用）
+                if page_url in cache:
+                    cache[page_url]["cached_details"] = details
 
                 # 保存链接到缓存（供下次增量时跳过的页面使用）
                 if page_url in cache and new_links:

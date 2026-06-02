@@ -112,27 +112,36 @@ def generate_report(results, keywords, output_dir=None):
     lines.append("## 二、网页检查详情")
     lines.append("")
     web_details = web.get("details", [])
-    cached_matched = web.get("cached_matched_urls", [])
-    if web_details:
-        lines.append(f"本次新发现 **{len(web_details)}** 处涉密匹配：")
+    new_web = [d for d in web_details if not d.get("from_cache")]
+    cached_web = [d for d in web_details if d.get("from_cache")]
+
+    if new_web:
+        lines.append(f"本次新发现 **{len(new_web)}** 处涉密匹配：")
         lines.append("")
         lines.append("| 序号 | URL | 行号 | 关键词 | 内容摘要 |")
         lines.append("|-----|-----|------|-------|---------|")
-        for idx, d in enumerate(web_details, 1):
+        for idx, d in enumerate(new_web, 1):
             url_short = d['url'][:60] + "..." if len(d['url']) > 60 else d['url']
             content_short = _sanitize(d['content'])
             lines.append(f"| {idx} | {url_short} | {d['line_no']} | "
                          f"{d['keyword']} | {content_short} |")
-    elif cached_matched:
-        lines.append(f"本次检查无新增涉密内容。以下 **{len(cached_matched)}** 个页面"
-                     f"在上次检查中发现涉密内容（本次未变化，跳过检查）：")
         lines.append("")
-        for idx, url in enumerate(sorted(cached_matched), 1):
-            url_short = url[:80] + "..." if len(url) > 80 else url
-            lines.append(f"{idx}. {url_short}")
-    else:
+
+    if cached_web:
+        lines.append(f"上次已发现的涉密内容（本次未变化，共 **{len(cached_web)}** 处）：")
+        lines.append("")
+        lines.append("| 序号 | URL | 行号 | 关键词 | 内容摘要 |")
+        lines.append("|-----|-----|------|-------|---------|")
+        for idx, d in enumerate(cached_web, 1):
+            url_short = d['url'][:60] + "..." if len(d['url']) > 60 else d['url']
+            content_short = _sanitize(d['content'])
+            lines.append(f"| {idx} | {url_short} | {d['line_no']} | "
+                         f"{d['keyword']} | {content_short} |")
+        lines.append("")
+
+    if not new_web and not cached_web:
         lines.append("未发现涉密内容。")
-    lines.append("")
+        lines.append("")
 
     # ========== 数据库检查详情 ==========
     lines.append("---")
