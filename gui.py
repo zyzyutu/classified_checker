@@ -161,6 +161,20 @@ class App:
         db_outer = ttk.Frame(config_frame)
         db_outer.grid(row=2, column=1, columnspan=2, sticky=tk.EW, padx=(0, ctrl_pad))
 
+        # 列标题
+        header_frame = ttk.Frame(db_outer)
+        header_frame.pack(fill=tk.X)
+        header_frame.columnconfigure(0, weight=1)
+        hdr = ttk.Frame(header_frame)
+        hdr.pack(fill=tk.X)
+        small_hint = ("Microsoft YaHei", 9)
+        for col, (text, width) in enumerate([
+            ("类型", 10), ("地址/路径", 18), ("用户名", 10),
+            ("密码", 10), ("库名(留空=全部)", 12)
+        ]):
+            ttk.Label(hdr, text=text, font=small_hint, foreground="#888888",
+                      width=width, anchor=tk.W).grid(row=0, column=col, padx=(0, 4))
+
         # 连接列表容器
         self.db_conn_list_frame = ttk.Frame(db_outer)
         self.db_conn_list_frame.pack(fill=tk.X)
