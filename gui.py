@@ -76,15 +76,15 @@ class App:
         style.configure("TFrame", background=BG_COLOR)
         style.configure("TLabel", background=BG_COLOR, foreground=FG_COLOR)
         style.configure("TButton", padding=6)
-        style.configure("TEntry", font=("Microsoft YaHei", 14),
+        style.configure("TEntry", font=("Microsoft YaHei", 15),
                         fieldbackground="#ffffff", foreground="#1a1a1a")
         style.configure("TLabelframe", background=BG_COLOR, foreground=ACCENT_COLOR)
         style.configure("TLabelframe.Label", background=BG_COLOR,
-                        foreground=ACCENT_COLOR, font=("Microsoft YaHei", 15, "bold"))
+                        foreground=ACCENT_COLOR, font=("Microsoft YaHei", 16, "bold"))
         style.configure("Header.TLabel", font=("Microsoft YaHei", 20, "bold"),
                         foreground=ACCENT_COLOR, background=BG_COLOR)
-        style.configure("Status.TLabel", foreground=ACCENT_COLOR, font=("Consolas", 13))
-        style.configure("Accent.TButton", font=("Microsoft YaHei", 15, "bold"))
+        style.configure("Status.TLabel", foreground=ACCENT_COLOR, font=("Consolas", 14))
+        style.configure("Accent.TButton", font=("Microsoft YaHei", 16, "bold"))
 
         style.configure("green.Horizontal.TProgressbar",
                         troughcolor="#3c3c3c", background=BTN_START_COLOR)
@@ -101,7 +101,7 @@ class App:
         title_frame = tk.Frame(main_frame, bg=TITLE_BG, padx=15, pady=12)
         title_frame.grid(row=0, column=0, sticky=tk.EW, pady=(0, 8))
         tk.Label(title_frame, text="涉密信息综合检查系统",
-                 font=("Microsoft YaHei", 22, "bold"),
+                 font=("Microsoft YaHei", 24, "bold"),
                  fg=ACCENT_COLOR, bg=TITLE_BG).pack(side=tk.LEFT)
         tk.Label(title_frame, text="v2.0",
                  font=("Consolas", 14), fg="#888888",
@@ -120,8 +120,8 @@ class App:
         row_pad = 12
         ctrl_pad = 12
         lbl_w = 18
-        entry_font = ("Microsoft YaHei", 14)
-        lbl_font = ("Microsoft YaHei", 13)
+        entry_font = ("Microsoft YaHei", 15)
+        lbl_font = ("Microsoft YaHei", 14)
 
         # 文档目录
         ttk.Label(config_frame, text="文档目录:", width=lbl_w,
@@ -168,7 +168,7 @@ class App:
         self.db_grid.columnconfigure(1, weight=1)  # 地址列自动扩展
 
         # 列标题（row=0）
-        small_hint = ("Microsoft YaHei", 9)
+        small_hint = ("Microsoft YaHei", 10)
         for col, text in enumerate(["类型", "地址/路径", "用户名", "密码", "库名(留空=全部)", ""]):
             ttk.Label(self.db_grid, text=text, font=small_hint,
                       foreground="#888888").grid(row=0, column=col, sticky=tk.W, padx=(0, 6))
@@ -179,7 +179,7 @@ class App:
         # 添加按钮
         add_btn_frame = ttk.Frame(db_outer)
         add_btn_frame.pack(fill=tk.X, pady=(6, 0))
-        tk.Button(add_btn_frame, text="+ 添加连接", font=("Microsoft YaHei", 11),
+        tk.Button(add_btn_frame, text="+ 添加连接", font=("Microsoft YaHei", 12),
                   bg="#3c3c3c", fg=ACCENT_COLOR, relief=tk.FLAT, padx=10, pady=4,
                   cursor="hand2", command=self._add_db_connection).pack(side=tk.LEFT)
 
@@ -198,7 +198,7 @@ class App:
                   font=entry_font).grid(row=3, column=1, sticky=tk.EW,
                                         padx=(0, ctrl_pad))
         ttk.Label(config_frame, text="(逗号分隔)", foreground="#888888",
-                  font=("Microsoft YaHei", 12)).grid(row=3, column=2,
+                  font=("Microsoft YaHei", 13)).grid(row=3, column=2,
                                                      sticky=tk.W, padx=(4, 0))
 
         # 目标网址
@@ -224,11 +224,11 @@ class App:
                   orient=tk.HORIZONTAL, length=350).pack(side=tk.LEFT)
         self.workers_label = ttk.Label(workers_frame, text=str(WEB_MAX_WORKERS),
                                        width=3, foreground=ACCENT_COLOR,
-                                       font=("Consolas", 15, "bold"))
+                                       font=("Consolas", 16, "bold"))
         self.workers_label.pack(side=tk.LEFT, padx=(10, 0))
         ttk.Label(workers_frame, text="(1=单线程, 建议4~8)",
                   foreground="#888888",
-                  font=("Microsoft YaHei", 12)).pack(side=tk.LEFT, padx=(10, 0))
+                  font=("Microsoft YaHei", 13)).pack(side=tk.LEFT, padx=(10, 0))
         self.web_workers_var.trace_add("write", self._update_workers_label)
 
         # 增量检查开关
@@ -240,7 +240,7 @@ class App:
                         variable=self.web_incremental_var).pack(side=tk.LEFT)
         ttk.Label(incr_frame, text="  启用后仅检查更新的页面，跳过未变化的页面",
                   foreground="#888888",
-                  font=("Microsoft YaHei", 12)).pack(side=tk.LEFT, padx=(8, 0))
+                  font=("Microsoft YaHei", 13)).pack(side=tk.LEFT, padx=(8, 0))
 
         # ---------- 操作按钮 ----------
         btn_frame = ttk.Frame(top_frame)
@@ -249,7 +249,7 @@ class App:
         self.start_btn = tk.Button(btn_frame, text="▶ 开始检查",
                                    command=self._start_check,
                                    bg=BTN_START_COLOR, fg="white",
-                                   font=("Microsoft YaHei", 15, "bold"),
+                                   font=("Microsoft YaHei", 16, "bold"),
                                    relief=tk.FLAT, padx=28, pady=12,
                                    activebackground="#66BB6A", cursor="hand2")
         self.start_btn.pack(side=tk.LEFT, padx=(0, 14))
@@ -305,7 +305,7 @@ class App:
         result_frame.pack(fill=tk.BOTH, expand=True)
 
         self.log_text = scrolledtext.ScrolledText(
-            result_frame, wrap=tk.WORD, font=("Consolas", 13),
+            result_frame, wrap=tk.WORD, font=("Consolas", 14),
             state=tk.DISABLED, bg="#1e1e1e", fg="#d4d4d4",
             insertbackground="white", relief=tk.FLAT,
             borderwidth=0, padx=14, pady=12)
@@ -327,7 +327,7 @@ class App:
         conn = preset or {"type": "MySQL", "host": "localhost", "user": "root",
                           "password": "", "db_name": ""}
 
-        small_font = ("Microsoft YaHei", 11)
+        small_font = ("Microsoft YaHei", 12)
         g = self.db_grid
 
         # 类型下拉
@@ -359,7 +359,7 @@ class App:
         dbname_entry.grid(row=row, column=4, padx=(0, 6), pady=2)
 
         # 删除按钮
-        del_btn = tk.Button(g, text="×", font=("Microsoft YaHei", 11, "bold"),
+        del_btn = tk.Button(g, text="×", font=("Microsoft YaHei", 12, "bold"),
                             fg="#ff5555", bg=BG_COLOR, relief=tk.FLAT, width=2,
                             cursor="hand2",
                             command=lambda: self._remove_db_connection(row))
