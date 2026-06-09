@@ -161,24 +161,20 @@ class App:
         db_outer = ttk.Frame(config_frame)
         db_outer.grid(row=2, column=1, columnspan=2, sticky=tk.EW, padx=(0, ctrl_pad))
 
-        # 列标题
-        header_frame = ttk.Frame(db_outer)
-        header_frame.pack(fill=tk.X)
-        header_frame.columnconfigure(0, weight=1)
-        hdr = ttk.Frame(header_frame)
-        hdr.pack(fill=tk.X)
-        small_hint = ("Microsoft YaHei", 9)
-        for col, (text, width) in enumerate([
-            ("类型", 10), ("地址/路径", 18), ("用户名", 10),
-            ("密码", 10), ("库名(留空=全部)", 12)
-        ]):
-            ttk.Label(hdr, text=text, font=small_hint, foreground="#888888",
-                      width=width, anchor=tk.W).grid(row=0, column=col, padx=(0, 4))
+        # 统一网格容器（标题 + 所有连接行共享列宽）
+        self.db_grid = ttk.Frame(db_outer)
+        self.db_grid.pack(fill=tk.X)
+        # 列: 0=类型 1=地址 2=用户名 3=密码 4=库名 5=删除按钮
+        self.db_grid.columnconfigure(1, weight=1)  # 地址列自动扩展
 
-        # 连接列表容器
-        self.db_conn_list_frame = ttk.Frame(db_outer)
-        self.db_conn_list_frame.pack(fill=tk.X)
-        self.db_conn_list_frame.columnconfigure(0, weight=1)
+        # 列标题（row=0）
+        small_hint = ("Microsoft YaHei", 9)
+        for col, text in enumerate(["类型", "地址/路径", "用户名", "密码", "库名(留空=全部)", ""]):
+            ttk.Label(self.db_grid, text=text, font=small_hint,
+                      foreground="#888888").grid(row=0, column=col, sticky=tk.W, padx=(0, 6))
+
+        # 连接行从 row=1 开始
+        self.db_conn_rows = []
 
         # 添加按钮
         add_btn_frame = ttk.Frame(db_outer)
@@ -188,8 +184,7 @@ class App:
                   cursor="hand2", command=self._add_db_connection).pack(side=tk.LEFT)
 
         # 连接数据和UI行引用
-        self.db_connections = []  # [{"type", "host", "user", "password", "db_name"}, ...]
-        self.db_conn_rows = []    # [{"frame": Frame, "vars": {...}}, ...]
+        self.db_conn_rows = []    # [{"row": int, "widgets": [...], "type_var", ...}, ...]
 
         # 预置一条默认连接
         self._add_db_connection({"type": "MySQL", "host": "localhost",
@@ -326,55 +321,49 @@ class App:
     # ==================== 辅助方法 ====================
 
     def _add_db_connection(self, preset=None):
-        """添加一条数据库连接配置行"""
+        """添加一条数据库连接配置行（直接在共享网格中添加控件）"""
         idx = len(self.db_conn_rows)
+        row = idx + 1  # row=0 是列标题
         conn = preset or {"type": "MySQL", "host": "localhost", "user": "root",
                           "password": "", "db_name": ""}
-        self.db_connections.append(conn)
-
-        row_frame = ttk.Frame(self.db_conn_list_frame)
-        row_frame.grid(row=idx, column=0, sticky=tk.EW, pady=2)
-        row_frame.columnconfigure(1, weight=2)
-        row_frame.columnconfigure(3, weight=1)
-        row_frame.columnconfigure(4, weight=1)
-        row_frame.columnconfigure(5, weight=1)
 
         small_font = ("Microsoft YaHei", 11)
+        g = self.db_grid
 
         # 类型下拉
         type_var = tk.StringVar(value=conn["type"])
-        type_combo = ttk.Combobox(row_frame, textvariable=type_var,
+        type_combo = ttk.Combobox(g, textvariable=type_var,
                                   values=["MySQL", "SQL Server", "PostgreSQL", "SQLite"],
                                   state="readonly", width=10, font=small_font)
-        type_combo.grid(row=0, column=0, padx=(0, 4))
+        type_combo.grid(row=row, column=0, sticky=tk.W, padx=(0, 6), pady=2)
 
         # 地址
         host_var = tk.StringVar(value=conn["host"])
-        host_entry = ttk.Entry(row_frame, textvariable=host_var, font=small_font, width=18)
-        host_entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, 4))
+        host_entry = ttk.Entry(g, textvariable=host_var, font=small_font)
+        host_entry.grid(row=row, column=1, sticky=tk.EW, padx=(0, 6), pady=2)
 
         # 用户名
         user_var = tk.StringVar(value=conn["user"])
-        user_entry = ttk.Entry(row_frame, textvariable=user_var, font=small_font, width=10)
-        user_entry.grid(row=0, column=2, padx=(0, 4))
+        user_entry = ttk.Entry(g, textvariable=user_var, font=small_font, width=12)
+        user_entry.grid(row=row, column=2, padx=(0, 6), pady=2)
 
         # 密码
         pwd_var = tk.StringVar(value=conn["password"])
-        pwd_entry = ttk.Entry(row_frame, textvariable=pwd_var, font=small_font,
-                              width=10, show="*")
-        pwd_entry.grid(row=0, column=3, padx=(0, 4))
+        pwd_entry = ttk.Entry(g, textvariable=pwd_var, font=small_font,
+                              width=12, show="*")
+        pwd_entry.grid(row=row, column=3, padx=(0, 6), pady=2)
 
         # 库名
         dbname_var = tk.StringVar(value=conn["db_name"])
-        dbname_entry = ttk.Entry(row_frame, textvariable=dbname_var, font=small_font, width=12)
-        dbname_entry.grid(row=0, column=4, padx=(0, 4))
+        dbname_entry = ttk.Entry(g, textvariable=dbname_var, font=small_font, width=14)
+        dbname_entry.grid(row=row, column=4, padx=(0, 6), pady=2)
 
         # 删除按钮
-        del_btn = tk.Button(row_frame, text="×", font=("Microsoft YaHei", 11, "bold"),
+        del_btn = tk.Button(g, text="×", font=("Microsoft YaHei", 11, "bold"),
                             fg="#ff5555", bg=BG_COLOR, relief=tk.FLAT, width=2,
                             cursor="hand2",
-                            command=lambda: self._remove_db_connection(row_frame))
-        del_btn.grid(row=0, column=5)
+                            command=lambda: self._remove_db_connection(row))
+        del_btn.grid(row=row, column=5, pady=2)
 
         # SQLite 切换时隐藏/显示用户名密码
         def on_type_change(*_):
@@ -392,23 +381,29 @@ class App:
         on_type_change()  # 初始化
 
         self.db_conn_rows.append({
-            "frame": row_frame,
+            "row": row,  # 网格行号
+            "widgets": [type_combo, host_entry, user_entry, pwd_entry, dbname_entry, del_btn],
             "type_var": type_var, "host_var": host_var,
             "user_var": user_var, "pwd_var": pwd_var,
             "dbname_var": dbname_var
         })
 
-    def _remove_db_connection(self, row_frame):
+    def _remove_db_connection(self, grid_row):
         """删除一条数据库连接"""
-        for i, row in enumerate(self.db_conn_rows):
-            if row["frame"] == row_frame:
-                row_frame.destroy()
+        for i, row_data in enumerate(self.db_conn_rows):
+            if row_data["row"] == grid_row:
+                # 销毁该行所有控件
+                for w in row_data["widgets"]:
+                    w.destroy()
                 self.db_conn_rows.pop(i)
-                self.db_connections.pop(i)
                 break
-        # 重新布局剩余行
-        for i, row in enumerate(self.db_conn_rows):
-            row["frame"].grid(row=i, column=0, sticky=tk.EW, pady=2)
+        # 重新布局：所有行上移
+        for i, row_data in enumerate(self.db_conn_rows):
+            new_row = i + 1  # row=0 是标题
+            for w in row_data["widgets"]:
+                info = w.grid_info()
+                w.grid(row=new_row)
+            row_data["row"] = new_row
 
     def _update_workers_label(self, *_):
         """更新线程数标签显示"""
