@@ -94,7 +94,7 @@ class App:
         # ========== 主容器 ==========
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        main_frame.rowconfigure(1, weight=1)
+        main_frame.rowconfigure(2, weight=1)
         main_frame.columnconfigure(0, weight=1)
 
         # ========== 标题栏 ==========
