@@ -41,8 +41,8 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("涉密信息综合检查系统")
-        self.root.geometry("1550x1200")
-        self.root.minsize(1200, 900)
+        self.root.geometry("1600x1000")
+        self.root.minsize(1400, 900)
         self.root.configure(bg=BG_COLOR)
 
         # 消息队列：用于子线程向主线程安全传递日志
