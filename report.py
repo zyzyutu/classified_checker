@@ -313,7 +313,9 @@ def generate_report(results, keywords, output_dir=None):
     lines = [
         "# 涉密信息综合检查报告", "",
         f"**检查时间**: {now.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"**检查关键词**: {', '.join(keywords)}", "",
+        f"**检查关键词**: {', '.join(keywords)}",
+        "**学号**: 23020007167 23020007173",
+        "**GitHub**: https://github.com/zyzyutu/classified_checker", "",
         "---", "",
     ]
     lines += _section_summary(web, db, file, image)
