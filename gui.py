@@ -111,7 +111,7 @@ class App:
         top_frame = ttk.Frame(main_frame)
         top_frame.grid(row=1, column=0, sticky=tk.EW)
         top_frame.grid_propagate(False)
-        top_frame.configure(height=780)
+        top_frame.configure(height=860)
 
         # ---------- 配置区域 ----------
         config_frame = ttk.LabelFrame(top_frame, text=" 检查配置 ",
