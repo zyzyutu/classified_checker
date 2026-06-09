@@ -110,8 +110,6 @@ class App:
         # ========== 上半区：配置 + 按钮 + 进度条 ==========
         top_frame = ttk.Frame(main_frame)
         top_frame.grid(row=1, column=0, sticky=tk.EW)
-        top_frame.grid_propagate(False)
-        top_frame.configure(height=860)
 
         # ---------- 配置区域 ----------
         config_frame = ttk.LabelFrame(top_frame, text=" 检查配置 ",
