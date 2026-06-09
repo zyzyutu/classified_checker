@@ -16,6 +16,7 @@ from config import (DOC_DIR, IMG_DIR,
                     WEB_MAX_WORKERS, WEB_CACHE_PATH)
 from checker_web import check_web
 from checker_db import check_database, check_all_databases
+from db_adapters import create_adapter
 from checker_file import check_files, check_encrypted_files
 from checker_image import check_images
 from report import generate_report
@@ -156,70 +157,89 @@ class App:
                    command=lambda: self._browse_dir_add(self.img_dir_var)
                    ).pack(side=tk.LEFT, padx=(4, 0))
 
-        # 数据库连接
-        ttk.Label(config_frame, text="数据库连接:", width=lbl_w,
+        # 数据库类型
+        ttk.Label(config_frame, text="数据库类型:", width=lbl_w,
                   anchor=tk.E, font=lbl_font).grid(row=2, column=0, padx=(0, 8), pady=row_pad)
-        db_conn_frame = ttk.Frame(config_frame)
-        db_conn_frame.grid(row=2, column=1, sticky=tk.EW, padx=(0, ctrl_pad))
-        db_conn_frame.columnconfigure(0, weight=2)
-        db_conn_frame.columnconfigure(1, weight=1)
-        db_conn_frame.columnconfigure(2, weight=1)
-        self.db_host_var = tk.StringVar(value="localhost")
-        ttk.Entry(db_conn_frame, textvariable=self.db_host_var,
-                  font=entry_font, width=16).grid(row=0, column=0, sticky=tk.EW, padx=(0, 4))
-        self.db_user_var = tk.StringVar(value="root")
-        ttk.Entry(db_conn_frame, textvariable=self.db_user_var,
-                  font=entry_font, width=10).grid(row=0, column=1, sticky=tk.EW, padx=(0, 4))
-        self.db_password_var = tk.StringVar(value="")
-        ttk.Entry(db_conn_frame, textvariable=self.db_password_var,
-                  font=entry_font, width=10, show="*").grid(row=0, column=2, sticky=tk.EW)
-        ttk.Label(config_frame, text="(地址 / 用户名 / 密码)",
+        self.db_type_var = tk.StringVar(value="MySQL")
+        db_type_frame = ttk.Frame(config_frame)
+        db_type_frame.grid(row=2, column=1, sticky=tk.EW, padx=(0, ctrl_pad))
+        db_type_combo = ttk.Combobox(db_type_frame, textvariable=self.db_type_var,
+                                     values=["MySQL", "SQL Server", "PostgreSQL", "SQLite"],
+                                     state="readonly", width=12, font=entry_font)
+        db_type_combo.pack(side=tk.LEFT)
+        db_type_combo.bind("<<ComboboxSelected>>", self._on_db_type_change)
+        ttk.Label(config_frame, text="(选择数据库类型)",
                   foreground="#888888",
                   font=("Microsoft YaHei", 12)).grid(row=2, column=2,
                                                      sticky=tk.W, padx=(4, 0))
 
+        # 数据库连接
+        ttk.Label(config_frame, text="数据库连接:", width=lbl_w,
+                  anchor=tk.E, font=lbl_font).grid(row=3, column=0, padx=(0, 8), pady=row_pad)
+        db_conn_frame = ttk.Frame(config_frame)
+        db_conn_frame.grid(row=3, column=1, sticky=tk.EW, padx=(0, ctrl_pad))
+        db_conn_frame.columnconfigure(0, weight=2)
+        db_conn_frame.columnconfigure(1, weight=1)
+        db_conn_frame.columnconfigure(2, weight=1)
+        self.db_host_var = tk.StringVar(value="localhost")
+        self.db_host_entry = ttk.Entry(db_conn_frame, textvariable=self.db_host_var,
+                                       font=entry_font, width=16)
+        self.db_host_entry.grid(row=0, column=0, sticky=tk.EW, padx=(0, 4))
+        self.db_user_var = tk.StringVar(value="root")
+        self.db_user_entry = ttk.Entry(db_conn_frame, textvariable=self.db_user_var,
+                                       font=entry_font, width=10)
+        self.db_user_entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, 4))
+        self.db_password_var = tk.StringVar(value="")
+        self.db_password_entry = ttk.Entry(db_conn_frame, textvariable=self.db_password_var,
+                                           font=entry_font, width=10, show="*")
+        self.db_password_entry.grid(row=0, column=2, sticky=tk.EW)
+        self.db_conn_hint = ttk.Label(config_frame, text="(地址 / 用户名 / 密码)",
+                                      foreground="#888888",
+                                      font=("Microsoft YaHei", 12))
+        self.db_conn_hint.grid(row=3, column=2, sticky=tk.W, padx=(4, 0))
+
         # 检查范围
         ttk.Label(config_frame, text="检查范围:", width=lbl_w,
-                  anchor=tk.E, font=lbl_font).grid(row=3, column=0, padx=(0, 8), pady=row_pad)
+                  anchor=tk.E, font=lbl_font).grid(row=4, column=0, padx=(0, 8), pady=row_pad)
         self.db_name_var = tk.StringVar(value="")  # 留空=检查全部
         ttk.Entry(config_frame, textvariable=self.db_name_var,
-                  font=entry_font).grid(row=3, column=1, sticky=tk.EW,
+                  font=entry_font).grid(row=4, column=1, sticky=tk.EW,
                                         padx=(0, ctrl_pad))
-        ttk.Label(config_frame, text="(留空=全部, 或输入库名)",
-                  foreground="#888888",
-                  font=("Microsoft YaHei", 12)).grid(row=3, column=2,
-                                                     sticky=tk.W, padx=(4, 0))
+        self.db_range_hint = ttk.Label(config_frame, text="(留空=全部, 或输入库名)",
+                                       foreground="#888888",
+                                       font=("Microsoft YaHei", 12))
+        self.db_range_hint.grid(row=4, column=2, sticky=tk.W, padx=(4, 0))
 
         # 关键词
         ttk.Label(config_frame, text="检查关键词:", width=lbl_w,
-                  anchor=tk.E, font=lbl_font).grid(row=4, column=0, padx=(0, 8), pady=row_pad)
+                  anchor=tk.E, font=lbl_font).grid(row=5, column=0, padx=(0, 8), pady=row_pad)
         self.keywords_var = tk.StringVar(value=",".join(DEFAULT_KEYWORDS))
         ttk.Entry(config_frame, textvariable=self.keywords_var,
-                  font=entry_font).grid(row=4, column=1, sticky=tk.EW,
+                  font=entry_font).grid(row=5, column=1, sticky=tk.EW,
                                         padx=(0, ctrl_pad))
         ttk.Label(config_frame, text="(逗号分隔)", foreground="#888888",
-                  font=("Microsoft YaHei", 12)).grid(row=4, column=2,
+                  font=("Microsoft YaHei", 12)).grid(row=5, column=2,
                                                      sticky=tk.W, padx=(4, 0))
 
         # 目标网址
         ttk.Label(config_frame, text="目标网址:", width=lbl_w,
-                  anchor=tk.E, font=lbl_font).grid(row=5, column=0, padx=(0, 8), pady=row_pad)
+                  anchor=tk.E, font=lbl_font).grid(row=6, column=0, padx=(0, 8), pady=row_pad)
         self.web_url_var = tk.StringVar(value=WEB_TARGET_URL)
         ttk.Entry(config_frame, textvariable=self.web_url_var,
-                  font=entry_font).grid(row=5, column=1, sticky=tk.EW,
+                  font=entry_font).grid(row=6, column=1, sticky=tk.EW,
                                         padx=(0, ctrl_pad))
         web_btn_frame = ttk.Frame(config_frame)
-        web_btn_frame.grid(row=5, column=2, ipady=2)
+        web_btn_frame.grid(row=6, column=2, ipady=2)
         ttk.Button(web_btn_frame, text="+", width=3,
                    command=lambda: self._browse_url_add()
                    ).pack(side=tk.LEFT)
 
         # 并行线程数
         ttk.Label(config_frame, text="并行线程数:", width=lbl_w,
-                  anchor=tk.E, font=lbl_font).grid(row=7, column=0, padx=(0, 8), pady=row_pad)
+                  anchor=tk.E, font=lbl_font).grid(row=8, column=0, padx=(0, 8), pady=row_pad)
         self.web_workers_var = tk.IntVar(value=WEB_MAX_WORKERS)
         workers_frame = ttk.Frame(config_frame)
-        workers_frame.grid(row=7, column=1, sticky=tk.W, padx=(0, ctrl_pad))
+        workers_frame.grid(row=8, column=1, sticky=tk.W, padx=(0, ctrl_pad))
         ttk.Scale(workers_frame, from_=1, to=16, variable=self.web_workers_var,
                   orient=tk.HORIZONTAL, length=350).pack(side=tk.LEFT)
         self.workers_label = ttk.Label(workers_frame, text=str(WEB_MAX_WORKERS),
@@ -234,7 +254,7 @@ class App:
         # 增量检查开关
         self.web_incremental_var = tk.BooleanVar(value=True)
         incr_frame = ttk.Frame(config_frame)
-        incr_frame.grid(row=8, column=0, columnspan=2, sticky=tk.W,
+        incr_frame.grid(row=9, column=0, columnspan=2, sticky=tk.W,
                         padx=(0, 8), pady=row_pad)
         ttk.Checkbutton(incr_frame, text="增量检查（检测页面更新）",
                         variable=self.web_incremental_var).pack(side=tk.LEFT)
@@ -319,6 +339,27 @@ class App:
                                     font=("Consolas", 13, "bold"))
 
     # ==================== 辅助方法 ====================
+
+    def _on_db_type_change(self, event=None):
+        """数据库类型切换时更新界面提示"""
+        db_type = self.db_type_var.get()
+        if db_type == "SQLite":
+            # SQLite：只需要文件路径，隐藏用户名/密码
+            self.db_user_entry.grid_remove()
+            self.db_password_entry.grid_remove()
+            self.db_host_entry.config(width=40)
+            self.db_conn_hint.config(text="(SQLite 数据库文件路径)")
+            self.db_range_hint.config(text="(留空即可，SQLite 只有一个库)")
+            if not self.db_host_var.get() or self.db_host_var.get() == "localhost":
+                self.db_host_var.set("")
+        else:
+            self.db_user_entry.grid()
+            self.db_password_entry.grid()
+            self.db_host_entry.config(width=16)
+            self.db_conn_hint.config(text="(地址 / 用户名 / 密码)")
+            self.db_range_hint.config(text="(留空=全部, 或输入库名)")
+            if not self.db_host_var.get():
+                self.db_host_var.set("localhost")
 
     def _update_workers_label(self, *_):
         """更新线程数标签显示"""
@@ -472,6 +513,7 @@ class App:
             db_host = self.db_host_var.get().strip() or "localhost"
             db_user = self.db_user_var.get().strip() or "root"
             db_password = self.db_password_var.get()
+            db_type = self.db_type_var.get()
             doc_dir_input = self.doc_dir_var.get().strip()
             img_dir_input = self.img_dir_var.get().strip()
             web_workers = self.web_workers_var.get()
@@ -538,22 +580,36 @@ class App:
                 self.log_queue.put(("INFO", ""))
                 self.log_queue.put(("INFO", "━" * 50))
                 self.log_queue.put(("INFO",
-                                    f"[{current_step}/{total_steps}] 数据库检查 - {db_display}"))
+                                    f"[{current_step}/{total_steps}] 数据库检查({db_type}) - {db_display}"))
                 self.log_queue.put(("INFO", "━" * 50))
                 self._update_progress(30)
 
-                if db_name_input:
-                    db_func = lambda: check_database(db_name_input, keywords,
-                                                     log_callback=log_cb,
-                                                     host=db_host, user=db_user,
-                                                     password=db_password)
-                else:
-                    db_func = lambda: check_all_databases(keywords,
-                                                          log_callback=log_cb,
-                                                          host=db_host, user=db_user,
-                                                          password=db_password)
-                result = self._run_check_one("db", db_func,
-                    "数据库检查", 30, 50)
+                # 根据数据库类型创建适配器
+                type_map = {"MySQL": "mysql", "SQL Server": "sqlserver",
+                            "PostgreSQL": "postgresql", "SQLite": "sqlite"}
+                adapter_key = type_map.get(db_type, "mysql")
+                try:
+                    db_adapter = create_adapter(adapter_key)
+                    db_adapter.connect(db_host, db_user, db_password,
+                                       db_name_input or None)
+                except Exception as e:
+                    self.log_queue.put(("ERROR", f"  数据库连接失败: {e}"))
+                    result = None
+                    db_adapter = None
+
+                if db_adapter:
+                    if db_name_input:
+                        db_func = lambda: check_database(db_adapter, db_name_input,
+                                                         keywords, log_callback=log_cb)
+                    else:
+                        db_func = lambda: check_all_databases(db_adapter, keywords,
+                                                              log_callback=log_cb)
+                    result = self._run_check_one("db", db_func,
+                        "数据库检查", 30, 50)
+                    try:
+                        db_adapter.close()
+                    except Exception:
+                        pass
                 if result is None:
                     stopped = True
                 else:
