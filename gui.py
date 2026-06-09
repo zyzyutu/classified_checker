@@ -16,7 +16,7 @@ from config import (DOC_DIR, IMG_DIR,
                     WEB_MAX_WORKERS, WEB_CACHE_PATH)
 from checker_web import check_web
 from checker_db import check_database, check_all_databases
-from checker_file import check_files
+from checker_file import check_files, check_encrypted_files
 from checker_image import check_images
 from report import generate_report
 
@@ -54,6 +54,9 @@ class App:
         self.check_thread = None
         # 停止信号
         self._stop_event = threading.Event()
+        # 加密文件密码请求队列（子线程→GUI线程）
+        self._password_queue = queue.Queue()
+        self._password_result = None
 
         self._setup_styles()
         self._build_ui()
@@ -634,6 +637,78 @@ class App:
                                         f"  图片检查完成: {result['total_images']} 张图片, "
                                         f"{result['matched_images']} 张涉密"))
 
+            # ---------- 5. 加密文件解密检查 ----------
+            if not stopped and "file" in self._completed_modules:
+                file_result = self.results.get("file", {})
+                enc_files = list(file_result.get("encrypted_files", []))
+                enc_archives = list(file_result.get("encrypted_archives", []))
+                total_enc = len(enc_files) + len(enc_archives)
+
+                while total_enc > 0 and not self._stop_event.is_set():
+                    # 构造提示信息
+                    failed_names = [os.path.basename(e["file"]) for e in enc_files] + \
+                                   [os.path.basename(e["file"]) for e in enc_archives]
+                    name_list = "\n".join(f"  {i+1}. {n}" for i, n in enumerate(failed_names[:10]))
+                    if len(failed_names) > 10:
+                        name_list += f"\n  ...共{len(failed_names)}个"
+                    msg = (f"发现 {total_enc} 个加密文件/压缩包：\n\n"
+                           f"{name_list}\n\n"
+                           f"请输入密码解密（留空跳过）：")
+
+                    # 请求密码（跨线程）
+                    event = threading.Event()
+                    self._password_result = None
+                    self._password_queue.put({"msg": msg, "event": event})
+                    event.wait()  # 等待 GUI 线程弹窗完成
+
+                    password = self._password_result
+                    if password is None or password == "":
+                        # 用户跳过
+                        for e in enc_files:
+                            e["status"] = "skipped"
+                        for e in enc_archives:
+                            e["status"] = "skipped"
+                        self.log_queue.put(("INFO", "  用户跳过加密文件解密"))
+                        break
+
+                    # 解密检查
+                    self.log_queue.put(("INFO", f"  正在解密 {total_enc} 个加密文件..."))
+                    decrypt_details, decrypt_ok, decrypt_fail = check_encrypted_files(
+                        enc_files, enc_archives, password, keywords,
+                        log_callback=log_cb, max_workers=web_workers)
+
+                    # 更新状态
+                    for e in enc_files:
+                        if e["file"] in decrypt_ok:
+                            e["status"] = "decrypted"
+                            e["matched"] = sum(1 for d in decrypt_details
+                                               if d["file"] == e["file"])
+                        elif e["file"] in decrypt_fail:
+                            e["status"] = "failed"
+                    for e in enc_archives:
+                        if e["file"] in decrypt_ok:
+                            e["status"] = "decrypted"
+                            e["matched"] = sum(1 for d in decrypt_details
+                                               if d["file"] == e["file"])
+                        elif e["file"] in decrypt_fail:
+                            e["status"] = "failed"
+
+                    # 合并涉密匹配到文件结果
+                    if decrypt_details:
+                        file_result["details"].extend(decrypt_details)
+                        file_result["matched_files"] += len(set(
+                            d["file"] for d in decrypt_details))
+
+                    ok_count = len(decrypt_ok)
+                    fail_count = len(decrypt_fail)
+                    self.log_queue.put(("SUCCESS",
+                                        f"  解密完成: 成功{ok_count}个, 失败{fail_count}个"))
+
+                    # 准备下一轮（只重试失败的）
+                    enc_files = [e for e in enc_files if e["status"] == "failed"]
+                    enc_archives = [e for e in enc_archives if e["status"] == "failed"]
+                    total_enc = len(enc_files) + len(enc_archives)
+
             # ---------- 完成汇总 ----------
             self.log_queue.put(("INFO", ""))
             self.log_queue.put(("INFO", "=" * 60))
@@ -700,7 +775,7 @@ class App:
         self.log_queue.put((level, msg))
 
     def _poll_log_queue(self):
-        """轮询日志队列，将消息写入UI"""
+        """轮询日志队列，将消息写入UI；处理加密文件密码请求"""
         while not self.log_queue.empty():
             try:
                 level, msg = self.log_queue.get_nowait()
@@ -710,6 +785,17 @@ class App:
                 self.log_text.config(state=tk.DISABLED)
             except queue.Empty:
                 break
+
+        # 处理加密文件密码请求（子线程通过 _password_queue 请求）
+        try:
+            req = self._password_queue.get_nowait()
+            msg = req.get("msg", "请输入密码：")
+            pwd = simpledialog.askstring("加密文件解密", msg, show="*")
+            self._password_result = pwd  # None 表示用户取消
+            req["event"].set()  # 通知子线程
+        except queue.Empty:
+            pass
+
         self.root.after(100, self._poll_log_queue)
 
     def _update_progress(self, value):

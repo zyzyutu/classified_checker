@@ -76,21 +76,230 @@ def _is_archive_encrypted(fpath):
     return False
 
 
-def _extract_archive(fpath, extract_dir):
-    """解压压缩包到指定目录"""
+def _extract_archive(fpath, extract_dir, password=None):
+    """解压压缩包到指定目录，支持密码"""
     ext = os.path.splitext(fpath)[1].lower()
+    pwd = password.encode() if password else None
     if ext == '.zip':
         import zipfile
         with zipfile.ZipFile(fpath, 'r') as zf:
-            zf.extractall(extract_dir)
+            zf.extractall(extract_dir, pwd=pwd)
     elif ext == '.rar':
         import rarfile
         with rarfile.RarFile(fpath, 'r') as rf:
-            rf.extractall(extract_dir)
+            rf.extractall(extract_dir, pwd=password)
     elif ext == '.7z':
         import py7zr
         with py7zr.SevenZipFile(fpath, 'r') as sz:
-            sz.extractall(extract_dir)
+            sz.extractall(extract_dir, password=password)
+
+
+def check_encrypted_files(enc_files, enc_archives, password, keywords,
+                          log_callback=None, max_workers=6):
+    """
+    用密码解密加密文件并检查涉密内容。
+
+    参数:
+        enc_files:     加密文件列表 [{"file": path, "ext": ext}, ...]
+        enc_archives:  加密压缩包列表 [{"file": path, "ext": ext}, ...]
+        password:      解密密码
+        keywords:      关键词列表
+        log_callback:  日志回调
+        max_workers:   并行线程数
+
+    返回:
+        (details, successful, failed)
+        details:   涉密匹配详情（与 check_files 格式一致）
+        successful: 成功解密的文件路径列表
+        failed:     解密失败的文件路径列表
+    """
+    pattern = build_combined_pattern(keywords)
+    if not pattern:
+        return [], [], []
+
+    details = []
+    successful = []
+    failed = []
+
+    # --- 解密普通文件 ---
+    def decrypt_one_file(item):
+        fpath = item["file"]
+        ext = item["ext"]
+        try:
+            text = _decrypt_and_extract(fpath, ext, password)
+            if text is None or not text.strip():
+                return (fpath, False, [])
+            if text.startswith("[") and ("加密" in text or "损坏" in text):
+                return (fpath, False, [])
+            file_details = []
+            for line_no, content, keyword in check_text_for_keywords(text, pattern):
+                file_details.append({
+                    "file": fpath, "line_no": line_no,
+                    "content": content, "keyword": keyword, "file_type": ext
+                })
+            return (fpath, True, file_details)
+        except Exception as e:
+            if log_callback:
+                log_callback(f"  [解密] 失败: {fpath} - {e}")
+            return (fpath, False, [])
+
+    # --- 解密压缩包 ---
+    def decrypt_one_archive(item):
+        fpath = item["file"]
+        ext = item["ext"]
+        tmp_dir = tempfile.mkdtemp(prefix="classified_decrypt_")
+        try:
+            _extract_archive(fpath, tmp_dir, password=password)
+            arch_details = []
+            for root, dirs, files in os.walk(tmp_dir):
+                for fname in files:
+                    epath = os.path.join(root, fname)
+                    fext = os.path.splitext(fname)[1].lower()
+                    if fext not in MAGIC_NUMBERS or fext in ARCHIVE_EXTS:
+                        continue
+                    try:
+                        file_text = extract_text(epath, fext)
+                        if file_text is None or not file_text.strip():
+                            continue
+                        if file_text.startswith("[") and ("加密" in file_text or "损坏" in file_text):
+                            continue
+                        for line_no, content, keyword in check_text_for_keywords(file_text, pattern):
+                            arch_details.append({
+                                "file": fpath, "line_no": line_no,
+                                "content": content, "keyword": keyword,
+                                "file_type": f"[压缩包内{fext}]"
+                            })
+                    except Exception:
+                        pass
+            return (fpath, True, arch_details)
+        except Exception as e:
+            if log_callback:
+                log_callback(f"  [解密] 压缩包失败: {fpath} - {e}")
+            return (fpath, False, [])
+        finally:
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    # 并行处理
+    all_items = [(item, "file") for item in enc_files] + \
+                [(item, "archive") for item in enc_archives]
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {}
+        for item, kind in all_items:
+            if kind == "file":
+                futures[executor.submit(decrypt_one_file, item)] = item["file"]
+            else:
+                futures[executor.submit(decrypt_one_archive, item)] = item["file"]
+
+        for future in as_completed(futures):
+            try:
+                fpath, ok, file_details = future.result()
+                if ok:
+                    successful.append(fpath)
+                    details.extend(file_details)
+                    if log_callback:
+                        log_callback(f"  [解密] 成功: {fpath}")
+                else:
+                    failed.append(fpath)
+            except Exception as e:
+                fpath = futures[future]
+                failed.append(fpath)
+                if log_callback:
+                    log_callback(f"  [解密] 异常: {fpath} - {e}")
+
+    return details, successful, failed
+
+
+def _decrypt_and_extract(fpath, ext, password):
+    """用密码解密文件并提取文本"""
+    if ext == '.pdf':
+        return _decrypt_pdf(fpath, password)
+    elif ext in ('.docx', '.xlsx', '.pptx'):
+        return _decrypt_office_xml(fpath, ext, password)
+    elif ext in ('.doc', '.xls', '.ppt'):
+        return _decrypt_office_com(fpath, ext, password)
+    return None
+
+
+def _decrypt_pdf(fpath, password):
+    """解密 PDF 并提取文本"""
+    import PyPDF2
+    try:
+        reader = PyPDF2.PdfReader(fpath)
+        if reader.is_encrypted:
+            success = reader.decrypt(password)
+            if success == 0:
+                return None
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    except Exception:
+        return None
+
+
+def _decrypt_office_xml(fpath, ext, password):
+    """解密 DOCX/XLSX/PPTX（通过 msoffcrypto）"""
+    import msoffcrypto
+    import io
+    try:
+        with open(fpath, 'rb') as f:
+            office_file = msoffcrypto.OfficeFile(f)
+            office_file.load_key(password=password)
+            decrypted = io.BytesIO()
+            office_file.decrypt(decrypted)
+            decrypted.seek(0)
+
+        # 写临时文件后用 extract_text 读取
+        tmp_path = tempfile.mktemp(suffix=ext)
+        try:
+            with open(tmp_path, 'wb') as tmp_f:
+                tmp_f.write(decrypted.read())
+            return extract_text(tmp_path, ext)
+        finally:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+    except Exception:
+        return None
+
+
+def _decrypt_office_com(fpath, ext, password):
+    """解密 DOC/XLS/PPT（通过 COM 接口传密码）"""
+    from extractors import _com_app
+    try:
+        if ext == '.doc':
+            with _com_app(["Word.Application", "KWPS.Application"]) as app:
+                doc = app.Documents.Open(fpath, PasswordDocument=password)
+                text = doc.Content.Text
+                doc.Close(False)
+                return text
+        elif ext == '.xls':
+            with _com_app(["Excel.Application", "KET.Application"]) as app:
+                wb = app.Workbooks.Open(fpath, Password=password)
+                texts = []
+                for sheet in wb.Sheets:
+                    for row in sheet.UsedRange.Rows:
+                        for cell in row.Cells:
+                            val = cell.Value
+                            if val:
+                                texts.append(str(val))
+                wb.Close(False)
+                return "\n".join(texts)
+        elif ext == '.ppt':
+            with _com_app(["PowerPoint.Application", "KWPP.Application"]) as app:
+                pres = app.Presentations.Open(fpath, Password=password)
+                texts = []
+                for slide in pres.Slides:
+                    for shape in slide.Shapes:
+                        if shape.HasTextFrame:
+                            texts.append(shape.TextFrame.TextRange.Text)
+                pres.Close()
+                return "\n".join(texts)
+    except Exception:
+        return None
+    return None
 
 
 def _check_archive(fpath, pattern, log_callback, depth, visited_archives):
@@ -280,9 +489,9 @@ def check_files(dirs, keywords, log_callback=None, max_workers=6):
     matched_files = set()
     details = []
     type_counts = Counter()
-    encrypted_files = []
+    encrypted_files = []     # [{"file": path, "ext": ext, "status": "encrypted"}, ...]
     damaged_files = []
-    encrypted_archives = []
+    encrypted_archives = []  # 同上
     archives_scanned = 0
     visited_archives = set()
 
@@ -302,7 +511,7 @@ def check_files(dirs, keywords, log_callback=None, max_workers=6):
                 arch_details, is_encrypted = future.result()
                 archives_scanned += 1
                 if is_encrypted:
-                    encrypted_archives.append(arch_path)
+                    encrypted_archives.append({"file": arch_path, "ext": os.path.splitext(arch_path)[1].lower(), "status": "encrypted"})
                 else:
                     details.extend(arch_details)
                     if arch_details:
@@ -393,7 +602,7 @@ def check_files(dirs, keywords, log_callback=None, max_workers=6):
             try:
                 _, data = future.result()
                 if data["encrypted"]:
-                    encrypted_files.append(data["file"])
+                    encrypted_files.append({"file": data["file"], "ext": data["ext"], "status": "encrypted"})
                     if log_callback:
                         log_callback(f"  [文件] 已加密: {data['file']} "
                                      f"({data.get('status_msg', '')})")

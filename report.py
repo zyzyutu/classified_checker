@@ -119,8 +119,15 @@ def _section_summary(web, db, file, image):
     # 文件备注
     fn = []
     if file.get("archives_scanned"): fn.append(f"压缩包{file['archives_scanned']}个")
-    for key, label in [("encrypted_files", "加密"), ("damaged_files", "损坏"),
-                       ("hidden_files", "隐藏")]:
+    # 加密文件：显示解密状态
+    enc_all = file.get("encrypted_files", []) + file.get("encrypted_archives", [])
+    if enc_all:
+        dec_count = sum(1 for e in enc_all if isinstance(e, dict) and e.get("status") == "decrypted")
+        if dec_count:
+            fn.append(f"加密{len(enc_all)}个(已解密{dec_count}个)")
+        else:
+            fn.append(f"加密{len(enc_all)}个")
+    for key, label in [("damaged_files", "损坏"), ("hidden_files", "隐藏")]:
         cnt = len(file.get(key, []))
         if cnt: fn.append(f"{label}{cnt}个")
     # 数据库备注
@@ -226,12 +233,36 @@ def _section_file(file):
         lines += _md_table(["文件类型", "数量"], rows)
         lines.append("")
 
-    # 加密/损坏/隐藏文件
+    # 加密文件（带解密状态表格）
+    enc_all = file.get("encrypted_files", []) + file.get("encrypted_archives", [])
+    lines.append("### 4.2 加密文件")
+    lines.append("")
+    if enc_all:
+        status_map = {"decrypted": "✅ 已解密", "failed": "❌ 解密失败",
+                      "skipped": "⏭ 已跳过", "encrypted": "🔒 未处理"}
+        lines.append(f"共发现 **{len(enc_all)}** 个加密文件：")
+        lines.append("")
+        rows = []
+        for idx, item in enumerate(enc_all, 1):
+            if isinstance(item, dict):
+                fp = _truncate_path(item["file"])
+                ext = item.get("ext", "").upper().lstrip(".")
+                status = status_map.get(item.get("status", ""), item.get("status", ""))
+                matched = item.get("matched", "-")
+                matched_str = f"{matched}处匹配" if isinstance(matched, int) and matched > 0 else ("0处匹配" if isinstance(matched, int) and item.get("status") == "decrypted" else "-")
+                rows.append([idx, fp, ext, status, matched_str])
+            else:
+                rows.append([idx, _truncate_path(str(item)), "-", "🔒 未处理", "-"])
+        lines += _md_table(["序号", "文件路径", "类型", "解密状态", "涉密结果"], rows)
+    else:
+        lines.append("未发现加密文件。")
+    lines.append("")
+
+    # 损坏/隐藏文件
     for sub_idx, (key, label, empty_msg) in enumerate([
-        ("encrypted_files", "4.2 加密文件", "未发现加密文件。"),
         ("damaged_files", "4.3 损坏文件", "未发现损坏文件。"),
         ("hidden_files", "4.4 隐藏文件", "未发现隐藏文件。"),
-    ], 2):
+    ], 3):
         lines += _file_list(label, file.get(key, []), empty_msg)
 
     # 涉密匹配详情
