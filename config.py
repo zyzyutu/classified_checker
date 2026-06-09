@@ -9,12 +9,6 @@ import os
 DOC_DIR = r"F:\保密技术检查\document"
 IMG_DIR = r"F:\保密技术检查\image"
 
-# ========== MySQL 数据库连接配置 ==========
-DB_HOST = "localhost"
-DB_USER = "root"
-DB_PASSWORD = os.environ.get("CLASSIFIED_CHECKER_DB_PASS", "521581")
-DB_NAME = "baomi"
-
 # ========== 默认关键词（严格按实验文档） ==========
 DEFAULT_KEYWORDS = ["涉密", "秘密", "机密", "绝密", "保密", "泄密"]
 
@@ -39,6 +33,3 @@ SUPPORTED_FILE_EXTS = {
 
 # ========== 报告输出路径 ==========
 REPORT_DIR = r"D:\Tools\Claude\classified_checker"
-
-# ========== 检查结果持久化 ==========
-RESULTS_PATH = r"D:\Tools\Claude\classified_checker\check_results.json"

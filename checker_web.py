@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from bs4 import BeautifulSoup
 
-from utils import build_combined_pattern
+from utils import build_combined_pattern, check_text_for_keywords
 
 # 全局 Session 复用连接池
 _session = requests.Session()
@@ -116,20 +116,15 @@ def _check_page(url, html, pattern):
     """检查单个页面内容，返回 (details, new_links)"""
     soup = BeautifulSoup(html, "html.parser")
     text_content = soup.get_text(separator="\n")
-    lines = text_content.split("\n")
 
     details = []
-    for i, line in enumerate(lines, 1):
-        line_stripped = line.strip()
-        if not line_stripped:
-            continue
-        for m in pattern.finditer(line_stripped):
-            details.append({
-                "url": url,
-                "line_no": i,
-                "content": line_stripped[:120],
-                "keyword": m.group()
-            })
+    for line_no, content, keyword in check_text_for_keywords(text_content, pattern):
+        details.append({
+            "url": url,
+            "line_no": line_no,
+            "content": content,
+            "keyword": keyword
+        })
 
     # 提取同域名链接
     new_links = []
@@ -148,39 +143,13 @@ def _check_page(url, html, pattern):
 
 # ==================== 主检查函数 ====================
 
-def check_web(url, keywords, log_callback=None, max_depth=5,
-              max_workers=6, incremental=False, cache_path=None):
+def _check_single_web(url, pattern, log_callback=None, max_depth=None,
+                      max_workers=6, incremental=False, cache=None):
     """
-    多线程并行爬取检查网页涉密信息。
-
-    参数:
-        url:          起始URL
-        keywords:     关键词列表
-        log_callback: 日志回调函数（可选）
-        max_depth:    最大爬取深度（0表示只检查起始页面）
-        max_workers:  并行线程数（默认6）
-        incremental:  是否启用增量检测
-        cache_path:   缓存文件路径
-
-    返回:
-        dict: {
-            "total": 总页面数,
-            "matched_pages": 涉密页面数,
-            "skipped_pages": 跳过（未变化）页面数,
-            "new_pages": 新增/变化页面数,
-            "details": [{url, line_no, content, keyword}, ...]
-        }
+    BFS 并行爬取单个起始URL的网页涉密信息。
     """
-    pattern = build_combined_pattern(keywords)
-    if not pattern:
-        return {"total": 0, "matched_pages": 0,
-                "skipped_pages": 0, "new_pages": 0,
-                "details": [], "cached_matched_urls": []}
-
-    # 加载缓存
-    cache = load_cache(cache_path) if incremental else {}
-    if log_callback:
-        log_callback(f"  [网页] incremental={incremental}, cache_path={cache_path}, 缓存条目={len(cache)}")
+    if cache is None:
+        cache = {}
 
     parsed_base = urlparse(url)
     base_domain = parsed_base.netloc
@@ -196,10 +165,9 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
     # 当前深度的 URL 队列
     current_level = [url]
     visited.add(url)
+    depth = 0
 
-    for depth in range(max_depth + 1):
-        if not current_level:
-            break
+    while current_level:
 
         if log_callback:
             mode = "增量" if incremental else "全量"
@@ -234,7 +202,7 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
                             d_copy["from_cache"] = True
                             all_details.append(d_copy)
                     # 跳过的页面也要提取链接，保证深度遍历不中断
-                    if depth < max_depth:
+                    if max_depth is None or depth < max_depth:
                         cached_links = cache.get(page_url, {}).get("links", [])
                         for link in cached_links:
                             if link not in visited:
@@ -287,7 +255,7 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
                     cache[page_url]["links"] = new_links
 
                 # 收集下一层链接（去重）
-                if depth < max_depth:
+                if max_depth is None or depth < max_depth:
                     for link in new_links:
                         if link not in visited:
                             visited.add(link)
@@ -299,22 +267,14 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
                          f"跳过: {skipped}, 新增/更新: {new_or_changed}")
 
         current_level = next_level
-
-    # 保存缓存
-    if incremental:
-        success = save_cache(cache, cache_path)
-        if log_callback:
-            log_callback(f"  [网页] 保存缓存: {len(cache)} 条, 路径={cache_path}, 成功={success}")
-    else:
-        if log_callback:
-            log_callback(f"  [网页] 未启用增量检查，不保存缓存")
+        depth += 1
 
     # 本次跳过但缓存标记为涉密的 URL（排除本次有新匹配的）
     cached_matched_urls = []
     if incremental:
-        for url in skipped_matched:
-            if url not in matched_urls:
-                cached_matched_urls.append(url)
+        for skipped_url in skipped_matched:
+            if skipped_url not in matched_urls:
+                cached_matched_urls.append(skipped_url)
 
     return {
         "total": total,
@@ -323,4 +283,87 @@ def check_web(url, keywords, log_callback=None, max_depth=5,
         "new_pages": new_or_changed,
         "details": all_details,
         "cached_matched_urls": cached_matched_urls
+    }
+
+
+def check_web(urls, keywords, log_callback=None, max_depth=None,
+              max_workers=6, incremental=False, cache_path=None):
+    """
+    多线程并行爬取检查网页涉密信息。支持多起始URL。
+
+    参数:
+        urls:         起始URL（字符串或URL列表）
+        keywords:     关键词列表
+        log_callback: 日志回调函数（可选）
+        max_depth:    最大爬取深度（None=无限深度全站遍历）
+        max_workers:  并行线程数（默认6）
+        incremental:  是否启用增量检测
+        cache_path:   缓存文件路径
+
+    返回:
+        dict: {
+            "total": 总页面数,
+            "matched_pages": 涉密页面数,
+            "skipped_pages": 跳过（未变化）页面数,
+            "new_pages": 新增/变化页面数,
+            "details": [{url, line_no, content, keyword}, ...]
+        }
+    """
+    # 统一为列表
+    if isinstance(urls, str):
+        urls = [u.strip() for u in urls.split(";") if u.strip()]
+
+    pattern = build_combined_pattern(keywords)
+    if not pattern:
+        return {"total": 0, "matched_pages": 0,
+                "skipped_pages": 0, "new_pages": 0,
+                "details": [], "cached_matched_urls": []}
+
+    # 加载缓存（所有URL共享同一份缓存）
+    cache = load_cache(cache_path) if incremental else {}
+    if log_callback:
+        log_callback(f"  [网页] 增量={incremental}, 缓存条目={len(cache)}, "
+                     f"起始URL={len(urls)}个")
+
+    # 合并所有URL的结果
+    total = 0
+    matched_pages = 0
+    skipped = 0
+    new_or_changed = 0
+    all_details = []
+    all_cached_matched = []
+
+    for i, start_url in enumerate(urls, 1):
+        if log_callback:
+            log_callback(f"  [网页] ({i}/{len(urls)}) 开始爬取: {start_url}")
+
+        result = _check_single_web(
+            start_url, pattern,
+            log_callback=log_callback,
+            max_depth=max_depth,
+            max_workers=max_workers,
+            incremental=incremental,
+            cache=cache
+        )
+
+        total += result["total"]
+        matched_pages += result["matched_pages"]
+        skipped += result["skipped_pages"]
+        new_or_changed += result["new_pages"]
+        all_details.extend(result["details"])
+        all_cached_matched.extend(result.get("cached_matched_urls", []))
+
+    # 保存缓存（所有URL爬完后统一保存）
+    if incremental:
+        success = save_cache(cache, cache_path)
+        if log_callback:
+            log_callback(f"  [网页] 保存缓存: {len(cache)} 条, 成功={success}")
+
+    return {
+        "total": total,
+        "matched_pages": matched_pages,
+        "skipped_pages": skipped,
+        "new_pages": new_or_changed,
+        "details": all_details,
+        "cached_matched_urls": all_cached_matched
     }

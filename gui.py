@@ -7,20 +7,18 @@ GUI界面模块 - 基于tkinter的图形化操作界面
 import os
 import re
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
 import threading
 import queue
 
 from config import (DOC_DIR, IMG_DIR,
-                    DB_HOST, DB_USER, DB_PASSWORD, DB_NAME,
-                    DEFAULT_KEYWORDS, WEB_TARGET_URL, WEB_MAX_DEPTH,
-                    WEB_MAX_WORKERS, WEB_CACHE_PATH, RESULTS_PATH)
+                    DEFAULT_KEYWORDS, WEB_TARGET_URL,
+                    WEB_MAX_WORKERS, WEB_CACHE_PATH)
 from checker_web import check_web
-from checker_db import check_database
+from checker_db import check_database, check_all_databases
 from checker_file import check_files
 from checker_image import check_images
 from report import generate_report
-from results_manager import save_results, load_results, format_history_summary
 
 
 # ========== 样式常量 ==========
@@ -130,9 +128,14 @@ class App:
         doc_entry = ttk.Entry(config_frame, textvariable=self.doc_dir_var,
                               font=entry_font)
         doc_entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, ctrl_pad))
-        ttk.Button(config_frame, text="浏览", width=8,
+        doc_btn_frame = ttk.Frame(config_frame)
+        doc_btn_frame.grid(row=0, column=2, ipady=2)
+        ttk.Button(doc_btn_frame, text="浏览", width=6,
                    command=lambda: self._browse_dir(self.doc_dir_var)
-                   ).grid(row=0, column=2, ipady=2)
+                   ).pack(side=tk.LEFT)
+        ttk.Button(doc_btn_frame, text="+", width=3,
+                   command=lambda: self._browse_dir_add(self.doc_dir_var)
+                   ).pack(side=tk.LEFT, padx=(4, 0))
 
         # 图片目录
         ttk.Label(config_frame, text="图片目录:", width=lbl_w,
@@ -141,60 +144,79 @@ class App:
         img_entry = ttk.Entry(config_frame, textvariable=self.img_dir_var,
                               font=entry_font)
         img_entry.grid(row=1, column=1, sticky=tk.EW, padx=(0, ctrl_pad))
-        ttk.Button(config_frame, text="浏览", width=8,
+        img_btn_frame = ttk.Frame(config_frame)
+        img_btn_frame.grid(row=1, column=2, ipady=2)
+        ttk.Button(img_btn_frame, text="浏览", width=6,
                    command=lambda: self._browse_dir(self.img_dir_var)
-                   ).grid(row=1, column=2, ipady=2)
+                   ).pack(side=tk.LEFT)
+        ttk.Button(img_btn_frame, text="+", width=3,
+                   command=lambda: self._browse_dir_add(self.img_dir_var)
+                   ).pack(side=tk.LEFT, padx=(4, 0))
 
-        # 数据库名
-        ttk.Label(config_frame, text="数据库名:", width=lbl_w,
+        # 数据库连接
+        ttk.Label(config_frame, text="数据库连接:", width=lbl_w,
                   anchor=tk.E, font=lbl_font).grid(row=2, column=0, padx=(0, 8), pady=row_pad)
-        self.db_name_var = tk.StringVar(value=DB_NAME)
+        db_conn_frame = ttk.Frame(config_frame)
+        db_conn_frame.grid(row=2, column=1, sticky=tk.EW, padx=(0, ctrl_pad))
+        db_conn_frame.columnconfigure(0, weight=2)
+        db_conn_frame.columnconfigure(1, weight=1)
+        db_conn_frame.columnconfigure(2, weight=1)
+        self.db_host_var = tk.StringVar(value="localhost")
+        ttk.Entry(db_conn_frame, textvariable=self.db_host_var,
+                  font=entry_font, width=16).grid(row=0, column=0, sticky=tk.EW, padx=(0, 4))
+        self.db_user_var = tk.StringVar(value="root")
+        ttk.Entry(db_conn_frame, textvariable=self.db_user_var,
+                  font=entry_font, width=10).grid(row=0, column=1, sticky=tk.EW, padx=(0, 4))
+        self.db_password_var = tk.StringVar(value="")
+        ttk.Entry(db_conn_frame, textvariable=self.db_password_var,
+                  font=entry_font, width=10, show="*").grid(row=0, column=2, sticky=tk.EW)
+        ttk.Label(config_frame, text="(地址 / 用户名 / 密码)",
+                  foreground="#888888",
+                  font=("Microsoft YaHei", 12)).grid(row=2, column=2,
+                                                     sticky=tk.W, padx=(4, 0))
+
+        # 检查范围
+        ttk.Label(config_frame, text="检查范围:", width=lbl_w,
+                  anchor=tk.E, font=lbl_font).grid(row=3, column=0, padx=(0, 8), pady=row_pad)
+        self.db_name_var = tk.StringVar(value="")  # 留空=检查全部
         ttk.Entry(config_frame, textvariable=self.db_name_var,
-                  font=entry_font).grid(row=2, column=1, sticky=tk.EW,
+                  font=entry_font).grid(row=3, column=1, sticky=tk.EW,
                                         padx=(0, ctrl_pad))
+        ttk.Label(config_frame, text="(留空=全部, 或输入库名)",
+                  foreground="#888888",
+                  font=("Microsoft YaHei", 12)).grid(row=3, column=2,
+                                                     sticky=tk.W, padx=(4, 0))
 
         # 关键词
         ttk.Label(config_frame, text="检查关键词:", width=lbl_w,
-                  anchor=tk.E, font=lbl_font).grid(row=3, column=0, padx=(0, 8), pady=row_pad)
+                  anchor=tk.E, font=lbl_font).grid(row=4, column=0, padx=(0, 8), pady=row_pad)
         self.keywords_var = tk.StringVar(value=",".join(DEFAULT_KEYWORDS))
         ttk.Entry(config_frame, textvariable=self.keywords_var,
-                  font=entry_font).grid(row=3, column=1, sticky=tk.EW,
+                  font=entry_font).grid(row=4, column=1, sticky=tk.EW,
                                         padx=(0, ctrl_pad))
         ttk.Label(config_frame, text="(逗号分隔)", foreground="#888888",
-                  font=("Microsoft YaHei", 12)).grid(row=3, column=2,
+                  font=("Microsoft YaHei", 12)).grid(row=4, column=2,
                                                      sticky=tk.W, padx=(4, 0))
 
         # 目标网址
         ttk.Label(config_frame, text="目标网址:", width=lbl_w,
-                  anchor=tk.E, font=lbl_font).grid(row=4, column=0, padx=(0, 8), pady=row_pad)
+                  anchor=tk.E, font=lbl_font).grid(row=5, column=0, padx=(0, 8), pady=row_pad)
         self.web_url_var = tk.StringVar(value=WEB_TARGET_URL)
         ttk.Entry(config_frame, textvariable=self.web_url_var,
-                  font=entry_font).grid(row=4, column=1, sticky=tk.EW,
+                  font=entry_font).grid(row=5, column=1, sticky=tk.EW,
                                         padx=(0, ctrl_pad))
-
-        # 爬取深度
-        ttk.Label(config_frame, text="爬取深度:", width=lbl_w,
-                  anchor=tk.E, font=lbl_font).grid(row=5, column=0, padx=(0, 8), pady=row_pad)
-        self.web_depth_var = tk.IntVar(value=WEB_MAX_DEPTH)
-        depth_frame = ttk.Frame(config_frame)
-        depth_frame.grid(row=5, column=1, sticky=tk.W, padx=(0, ctrl_pad))
-        ttk.Scale(depth_frame, from_=0, to=10, variable=self.web_depth_var,
-                  orient=tk.HORIZONTAL, length=350).pack(side=tk.LEFT)
-        self.depth_label = ttk.Label(depth_frame, text=str(WEB_MAX_DEPTH),
-                                     width=3, foreground=ACCENT_COLOR,
-                                     font=("Consolas", 15, "bold"))
-        self.depth_label.pack(side=tk.LEFT, padx=(10, 0))
-        ttk.Label(depth_frame, text="(0=仅首页, 越大爬越深)",
-                  foreground="#888888",
-                  font=("Microsoft YaHei", 12)).pack(side=tk.LEFT, padx=(10, 0))
-        self.web_depth_var.trace_add("write", self._update_depth_label)
+        web_btn_frame = ttk.Frame(config_frame)
+        web_btn_frame.grid(row=5, column=2, ipady=2)
+        ttk.Button(web_btn_frame, text="+", width=3,
+                   command=lambda: self._browse_url_add()
+                   ).pack(side=tk.LEFT)
 
         # 并行线程数
         ttk.Label(config_frame, text="并行线程数:", width=lbl_w,
-                  anchor=tk.E, font=lbl_font).grid(row=6, column=0, padx=(0, 8), pady=row_pad)
+                  anchor=tk.E, font=lbl_font).grid(row=7, column=0, padx=(0, 8), pady=row_pad)
         self.web_workers_var = tk.IntVar(value=WEB_MAX_WORKERS)
         workers_frame = ttk.Frame(config_frame)
-        workers_frame.grid(row=6, column=1, sticky=tk.W, padx=(0, ctrl_pad))
+        workers_frame.grid(row=7, column=1, sticky=tk.W, padx=(0, ctrl_pad))
         ttk.Scale(workers_frame, from_=1, to=16, variable=self.web_workers_var,
                   orient=tk.HORIZONTAL, length=350).pack(side=tk.LEFT)
         self.workers_label = ttk.Label(workers_frame, text=str(WEB_MAX_WORKERS),
@@ -209,7 +231,7 @@ class App:
         # 增量检查开关
         self.web_incremental_var = tk.BooleanVar(value=True)
         incr_frame = ttk.Frame(config_frame)
-        incr_frame.grid(row=7, column=0, columnspan=2, sticky=tk.W,
+        incr_frame.grid(row=8, column=0, columnspan=2, sticky=tk.W,
                         padx=(0, 8), pady=row_pad)
         ttk.Checkbutton(incr_frame, text="增量检查（检测页面更新）",
                         variable=self.web_incremental_var).pack(side=tk.LEFT)
@@ -246,14 +268,6 @@ class App:
                                     activebackground="#42A5F5", cursor="hand2",
                                     state=tk.DISABLED)
         self.report_btn.pack(side=tk.LEFT, padx=(0, 14))
-
-        self.history_btn = tk.Button(btn_frame, text="查看历史",
-                                     command=self._show_history,
-                                     bg="#5D4037", fg="white",
-                                     font=("Microsoft YaHei", 15),
-                                     relief=tk.FLAT, padx=28, pady=12,
-                                     activebackground="#795548", cursor="hand2")
-        self.history_btn.pack(side=tk.LEFT, padx=(0, 14))
 
         self.clear_btn = tk.Button(btn_frame, text="清空日志",
                                    command=self._clear_log,
@@ -303,19 +317,41 @@ class App:
 
     # ==================== 辅助方法 ====================
 
-    def _update_depth_label(self, *_):
-        """更新深度标签显示"""
-        self.depth_label.config(text=str(self.web_depth_var.get()))
-
     def _update_workers_label(self, *_):
         """更新线程数标签显示"""
         self.workers_label.config(text=str(self.web_workers_var.get()))
 
     def _browse_dir(self, var):
-        """选择目录"""
+        """选择目录（替换）"""
         path = filedialog.askdirectory()
         if path:
             var.set(path)
+
+    def _browse_dir_add(self, var):
+        """追加目录（用分号分隔）"""
+        path = filedialog.askdirectory()
+        if path:
+            current = var.get().strip()
+            if current:
+                var.set(current + ";" + path)
+            else:
+                var.set(path)
+
+    def _browse_url_add(self):
+        """追加网址（用分号分隔）"""
+        url = simpledialog.askstring("添加网址", "输入新的目标网址:",
+                                     parent=self.root)
+        if url and url.strip():
+            current = self.web_url_var.get().strip()
+            if current:
+                self.web_url_var.set(current + ";" + url.strip())
+            else:
+                self.web_url_var.set(url.strip())
+            current = var.get().strip()
+            if current:
+                var.set(current + ";" + path)
+            else:
+                var.set(path)
 
     # ==================== 检查控制 ====================
 
@@ -330,34 +366,40 @@ class App:
         if not keywords:
             errors.append("检查关键词不能为空")
 
-        # 网页地址
+        # 网页地址（支持分号分隔多个）
         web_url = self.web_url_var.get().strip()
-        if web_url and not web_url.startswith(("http://", "https://")):
-            errors.append(f"网址格式错误: {web_url}\n需以 http:// 或 https:// 开头")
+        if web_url:
+            for u in web_url.split(";"):
+                u = u.strip()
+                if u and not u.startswith(("http://", "https://")):
+                    errors.append(f"网址格式错误: {u}\n需以 http:// 或 https:// 开头")
+                    break
 
-        # 数据库名
+        # 数据库名（留空=检查全部）
         db_name = self.db_name_var.get().strip()
-        if db_name:
-            if not re.match(r'^[a-zA-Z0-9_]+$', db_name):
-                errors.append(f"数据库名格式错误: {db_name}\n只允许字母、数字和下划线")
+        if db_name and not re.match(r'^[a-zA-Z0-9_]+$', db_name):
+            errors.append(f"数据库名格式错误: {db_name}\n只允许字母、数字和下划线")
 
-        # 目录路径
+        # 目录路径（支持分号分隔多目录）
         doc_dir = self.doc_dir_var.get().strip()
-        if doc_dir and not os.path.isdir(doc_dir):
-            errors.append(f"文档目录不存在: {doc_dir}")
+        if doc_dir:
+            for d in doc_dir.split(";"):
+                d = d.strip()
+                if d and not os.path.isdir(d):
+                    errors.append(f"文档目录不存在: {d}")
+                    break
 
         img_dir = self.img_dir_var.get().strip()
-        if img_dir and not os.path.isdir(img_dir):
-            errors.append(f"图片目录不存在: {img_dir}")
+        if img_dir:
+            for d in img_dir.split(";"):
+                d = d.strip()
+                if d and not os.path.isdir(d):
+                    errors.append(f"图片目录不存在: {d}")
+                    break
 
-        # 爬取深度
-        depth = self.web_depth_var.get()
-        if depth < 0 or depth > 10:
-            errors.append("爬取深度需在 0~10 之间")
-
-        # 全部为空
-        if not any([web_url, db_name, doc_dir, img_dir]):
-            errors.append("至少填写一项检查内容")
+        # 全部为空（数据库检查始终执行，只需其余三项有一项即可）
+        if not any([web_url, doc_dir, img_dir]):
+            errors.append("至少填写一项检查内容（网页/文档/图片）\n数据库检查会自动执行")
 
         if errors:
             messagebox.showwarning("输入校验", "\n\n".join(errors))
@@ -424,9 +466,11 @@ class App:
         try:
             web_url_input = self.web_url_var.get().strip()
             db_name_input = self.db_name_var.get().strip()
+            db_host = self.db_host_var.get().strip() or "localhost"
+            db_user = self.db_user_var.get().strip() or "root"
+            db_password = self.db_password_var.get()
             doc_dir_input = self.doc_dir_var.get().strip()
             img_dir_input = self.img_dir_var.get().strip()
-            web_depth = self.web_depth_var.get()
             web_workers = self.web_workers_var.get()
             web_incremental = self.web_incremental_var.get()
 
@@ -447,16 +491,18 @@ class App:
                 self.log_queue.put(("INFO", ""))
                 self.log_queue.put(("INFO", "━" * 50))
                 mode_str = "增量" if web_incremental else "全量"
+                url_count = len([u for u in web_url_input.split(";") if u.strip()])
+                url_display = web_url_input if url_count == 1 else f"{url_count}个网址"
                 self.log_queue.put(("INFO",
-                                    f"[{current_step}/{total_steps}] 网页检查({mode_str}) - {web_url_input} "
-                                    f"(深度{web_depth}, 线程{web_workers})"))
+                                    f"[{current_step}/{total_steps}] 网页检查({mode_str}) - {url_display} "
+                                    f"(全站遍历, 线程{web_workers})"))
                 self.log_queue.put(("INFO", "━" * 50))
                 self._update_progress(5)
 
                 result = self._run_check_one(
                     "web",
                     lambda: check_web(web_url_input, keywords,
-                                      log_callback=log_cb, max_depth=web_depth,
+                                      log_callback=log_cb,
                                       max_workers=web_workers,
                                       incremental=web_incremental,
                                       cache_path=WEB_CACHE_PATH),
@@ -484,20 +530,26 @@ class App:
                 pass
             elif self._stop_event.is_set():
                 stopped = True
-            elif db_name_input:
+            elif True:  # 始终执行数据库检查（db_name为空时检查全部）
+                db_display = db_name_input if db_name_input else "全部数据库"
                 self.log_queue.put(("INFO", ""))
                 self.log_queue.put(("INFO", "━" * 50))
                 self.log_queue.put(("INFO",
-                                    f"[{current_step}/{total_steps}] 数据库检查 - {db_name_input}"))
+                                    f"[{current_step}/{total_steps}] 数据库检查 - {db_display}"))
                 self.log_queue.put(("INFO", "━" * 50))
                 self._update_progress(30)
 
-                result = self._run_check_one(
-                    "db",
-                    lambda: check_database(db_name_input, keywords,
-                                           log_callback=log_cb,
-                                           host=DB_HOST, user=DB_USER,
-                                           password=DB_PASSWORD),
+                if db_name_input:
+                    db_func = lambda: check_database(db_name_input, keywords,
+                                                     log_callback=log_cb,
+                                                     host=db_host, user=db_user,
+                                                     password=db_password)
+                else:
+                    db_func = lambda: check_all_databases(keywords,
+                                                          log_callback=log_cb,
+                                                          host=db_host, user=db_user,
+                                                          password=db_password)
+                result = self._run_check_one("db", db_func,
                     "数据库检查", 30, 50)
                 if result is None:
                     stopped = True
@@ -611,14 +663,6 @@ class App:
                     self.log_queue.put(("ERROR",
                                         f"  报告生成失败: {e}"))
 
-            # ---------- 保存检查结果（最新覆盖模式） ----------
-            if self.results:
-                try:
-                    save_results(self.results, keywords, RESULTS_PATH)
-                    self.log_queue.put(("INFO", "  检查结果已保存"))
-                except Exception as e:
-                    self.log_queue.put(("WARN", f"  结果保存失败: {e}"))
-
             self.log_queue.put(("INFO", "=" * 60))
 
             self.root.after(0, lambda: self.report_btn.config(state=tk.NORMAL))
@@ -648,30 +692,6 @@ class App:
         except Exception as e:
             self._log("ERROR", f"报告生成失败: {e}")
             messagebox.showerror("错误", f"报告生成失败: {e}")
-
-    def _show_history(self):
-        """显示上次检查的历史结果"""
-        data = load_results(RESULTS_PATH)
-        summary = format_history_summary(data)
-
-        # 弹窗显示
-        win = tk.Toplevel(self.root)
-        win.title("检查历史记录")
-        win.geometry("900x600")
-        win.configure(bg=BG_COLOR)
-
-        header = ttk.Label(win, text="上次检查结果",
-                           style="Header.TLabel")
-        header.pack(pady=(10, 5))
-
-        text_widget = scrolledtext.ScrolledText(
-            win, wrap=tk.WORD, font=("Consolas", 13),
-            state=tk.NORMAL, bg="#1e1e1e", fg="#d4d4d4",
-            relief=tk.FLAT, padx=14, pady=12)
-        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-
-        text_widget.insert(tk.END, summary)
-        text_widget.config(state=tk.DISABLED)
 
     # ==================== 日志与进度 ====================
 
