@@ -13,9 +13,10 @@
 
 ### 数据库检查
 - GUI 界面输入数据库连接信息（地址/用户名/密码）
+- **多数据库类型支持**：MySQL、SQL Server、PostgreSQL、SQLite（适配器模式）
+- **多连接同时检查**：可添加多条数据库连接，一次检查全部
 - 支持检查全部数据库或指定单个数据库
-- 多库并行检查（ThreadPoolExecutor）
-- REGEXP 粗筛 + Python 正则精确匹配
+- LIKE 子串匹配 + Python 正则精确匹配（跨数据库兼容）
 - 自动检测表主键作为记录标识
 - 跳过数值字段，同行关键词去重合并
 
@@ -23,7 +24,9 @@
 - 支持 TXT、DOC、DOCX、XLS、XLSX、PPT、PPTX、PDF
 - 支持 ZIP、RAR、7Z 压缩包递归解压检查（最大嵌套 3 层）
 - Magic Number 文件头校验真实类型
-- 加密文件识别（Office/ZIP/RAR/7Z/PDF 多层检测）
+- **加密文件识别与解密**：支持 Office/ZIP/RAR/7Z/PDF 加密检测
+- **密码输入弹窗**：检测到加密文件后弹窗让用户输入密码，支持重试
+- 使用 msoffcrypto-tool 解密 Office/PDF 加密文件
 - 隐藏文件检测、损坏文件诊断
 - COM 应用实例缓存，RLock 可重入锁保证线程安全
 - 多线程并行检查
@@ -36,13 +39,16 @@
 
 ### 报告输出
 - 自动生成 Markdown 格式报告
-- 路径固定 40 列宽度截断，关键词截断显示
-- 长文本截取关键词周围上下文
+- 包含学号和 GitHub 链接
+- 长文本自动截取关键词周围上下文
+- 加密文件解密状态展示
 
 ### 界面
-- 深色主题 GUI，可配置各项参数
-- 数据库连接信息界面输入，密码隐藏显示
+- 深色主题 GUI，字体清晰可读
+- 多数据库连接列表管理（添加/删除）
+- 数据库类型切换时自动适配（SQLite 隐藏用户名密码）
 - 支持立即停止、断点续查
+- 加密文件密码输入弹窗（大尺寸，兼容深色主题）
 
 ## 快速开始
 
@@ -55,11 +61,14 @@ python main.py
 ```
 
 ## 依赖库
+
 | 库 | 用途 |
 |---|------|
 | requests | HTTP 请求 |
 | beautifulsoup4 | HTML 解析 |
-| pymysql | MySQL 连接 |
+| pymysql | MySQL 连接（可选） |
+| pymssql | SQL Server 连接（可选） |
+| psycopg2-binary | PostgreSQL 连接（可选） |
 | python-docx | DOCX 读取 |
 | openpyxl | XLSX 读取 |
 | python-pptx | PPTX 读取 |
@@ -69,6 +78,7 @@ python main.py
 | rapidocr-onnxruntime | OCR 识别 |
 | rarfile | RAR 解压 |
 | py7zr | 7Z 解压 |
+| msoffcrypto-tool | 加密 Office/PDF 解密 |
 
 ## 开发环境
 - Python 3.11
