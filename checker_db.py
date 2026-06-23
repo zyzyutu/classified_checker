@@ -7,8 +7,6 @@
   3. 多库并行检查（ThreadPoolExecutor）
 """
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 from utils import build_combined_pattern, check_text_for_keywords
 
 
@@ -171,7 +169,7 @@ def check_database(adapter, db_name, keywords, log_callback=None):
     }
 
 
-def check_all_databases(adapter, keywords, log_callback=None, max_workers=4):
+def check_all_databases(adapter, keywords, log_callback=None):
     """
     并行检查所有用户数据库。
 
@@ -209,34 +207,28 @@ def check_all_databases(adapter, keywords, log_callback=None, max_workers=4):
     merged_table_stats = {}
     merged_details = []
 
-    # 并行检查多个数据库
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                check_database, adapter, db, keywords, log_callback
-            ): db for db in user_dbs
-        }
+    # 顺序检查多个数据库（共享同一连接，不能并行）
+    for db_idx, db_name in enumerate(user_dbs):
+        if log_callback:
+            log_callback(f"  [数据库] 检查 {db_name} ({db_idx+1}/{len(user_dbs)})...")
+        try:
+            result = check_database(adapter, db_name, keywords, log_callback)
+        except Exception as e:
+            if log_callback:
+                log_callback(f"  [数据库] {db_name} 异常: {e}")
+            continue
 
-        for future in as_completed(futures):
-            db_name = futures[future]
-            try:
-                result = future.result()
-            except Exception as e:
-                if log_callback:
-                    log_callback(f"  [数据库] {db_name} 异常: {e}")
-                continue
+        total_tables += result["total_tables"]
+        total_records += result["total_records"]
+        candidate_records += result["candidate_records"]
+        matched_tables += result["matched_tables"]
 
-            total_tables += result["total_tables"]
-            total_records += result["total_records"]
-            candidate_records += result["candidate_records"]
-            matched_tables += result["matched_tables"]
+        for tname, tstats in result["table_stats"].items():
+            merged_table_stats[f"{db_name}.{tname}"] = tstats
 
-            for tname, tstats in result["table_stats"].items():
-                merged_table_stats[f"{db_name}.{tname}"] = tstats
-
-            for d in result["details"]:
-                d["table"] = f"{db_name}.{d['table']}"
-                merged_details.append(d)
+        for d in result["details"]:
+            d["table"] = f"{db_name}.{d['table']}"
+            merged_details.append(d)
 
     return {
         "total_databases": len(user_dbs),

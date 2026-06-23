@@ -5,3 +5,6 @@ __pycache__/
 .idea/
 web_cache.json
 check_results.json
+__pycache__/
+涉密检查报告_*.md
+img_cache.json

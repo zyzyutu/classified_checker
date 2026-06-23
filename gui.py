@@ -458,10 +458,11 @@ class App:
                     errors.append(f"网址格式错误: {u}\n需以 http:// 或 https:// 开头")
                     break
 
-        # 数据库名（留空=检查全部）
-        db_name = self.db_name_var.get().strip()
-        if db_name and not re.match(r'^[a-zA-Z0-9_]+$', db_name):
-            errors.append(f"数据库名格式错误: {db_name}\n只允许字母、数字和下划线")
+        # 数据库连接校验（多连接模式）
+        for conn in self.db_conn_rows:
+            db_name = conn["dbname_var"].get().strip()
+            if db_name and not re.match(r'^[a-zA-Z0-9_]+$', db_name):
+                errors.append(f"数据库名格式错误: {db_name}\n只允许字母、数字和下划线")
 
         # 目录路径（支持分号分隔多目录）
         doc_dir = self.doc_dir_var.get().strip()
@@ -912,6 +913,76 @@ class App:
         """向日志区域追加一行（线程安全）"""
         self.log_queue.put((level, msg))
 
+    def _ask_password_dialog(self, msg):
+        """弹出较大的密码输入对话框（使用 ttk 控件，兼容深色主题）"""
+        dlg = tk.Toplevel(self.root)
+        dlg.title("加密文件解密")
+        dlg.resizable(False, False)
+        dlg.configure(bg=BG_COLOR)
+        dlg.transient(self.root)
+        dlg.protocol("WM_DELETE_WINDOW", lambda: None)  # 禁止点X关闭
+
+        result = {"value": None}
+
+        # 提示文字
+        tk.Label(dlg, text=msg, font=("Microsoft YaHei", 14),
+                 bg=BG_COLOR, fg=FG_COLOR, wraplength=460,
+                 justify=tk.LEFT).pack(padx=30, pady=(25, 15), anchor=tk.W)
+
+        # 密码输入框（用 ttk.Entry，颜色由 style 控制）
+        pwd_frame = ttk.Frame(dlg)
+        pwd_frame.pack(fill=tk.X, padx=30, pady=(0, 20))
+        ttk.Label(pwd_frame, text="密码:",
+                  font=("Microsoft YaHei", 14)).pack(side=tk.LEFT)
+        pwd_var = tk.StringVar()
+        pwd_entry = ttk.Entry(pwd_frame, textvariable=pwd_var, show="*",
+                              font=("Microsoft YaHei", 15), width=35)
+        pwd_entry.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
+
+        # 按钮
+        btn_frame = tk.Frame(dlg, bg=BG_COLOR)
+        btn_frame.pack(fill=tk.X, padx=30, pady=(0, 20))
+
+        def on_ok(event=None):
+            result["value"] = pwd_var.get()
+            dlg.destroy()
+
+        def on_cancel():
+            result["value"] = None
+            dlg.destroy()
+
+        pwd_entry.bind("<Return>", on_ok)
+
+        ok_btn = tk.Button(btn_frame, text="确  认", font=("Microsoft YaHei", 14, "bold"),
+                           bg=BTN_START_COLOR, fg="white", relief=tk.FLAT,
+                           padx=20, pady=6, cursor="hand2", command=on_ok)
+        ok_btn.pack(side=tk.RIGHT, padx=(10, 0))
+
+        cancel_btn = tk.Button(btn_frame, text="跳  过", font=("Microsoft YaHei", 14),
+                               bg=BTN_CLEAR_COLOR, fg="white", relief=tk.FLAT,
+                               padx=20, pady=6, cursor="hand2", command=on_cancel)
+        cancel_btn.pack(side=tk.RIGHT)
+
+        # 先显示窗口，再设置大小和焦点
+        dlg.update_idletasks()
+        w, h = dlg.winfo_reqwidth() + 20, dlg.winfo_reqheight() + 10
+        x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        dlg.geometry(f"{w}x{h}+{x}+{y}")
+
+        # 延迟 grab，等窗口完全就绪
+        def _do_grab():
+            try:
+                dlg.grab_set()
+                pwd_entry.focus_force()
+                pwd_entry.icursor(tk.END)
+            except tk.TclError:
+                pass
+        dlg.after(150, _do_grab)
+
+        self.root.wait_window(dlg)
+        return result["value"]
+
     def _poll_log_queue(self):
         """轮询日志队列，将消息写入UI；处理加密文件密码请求"""
         while not self.log_queue.empty():
@@ -928,7 +999,7 @@ class App:
         try:
             req = self._password_queue.get_nowait()
             msg = req.get("msg", "请输入密码：")
-            pwd = simpledialog.askstring("加密文件解密", msg, show="*")
+            pwd = self._ask_password_dialog(msg)
             self._password_result = pwd  # None 表示用户取消
             req["event"].set()  # 通知子线程
         except queue.Empty:
