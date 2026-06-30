@@ -33,3 +33,9 @@ SUPPORTED_FILE_EXTS = {
 
 # ========== 报告输出路径 ==========
 REPORT_DIR = r"D:\Tools\Claude\classified_checker"
+
+# ========== 大模型检查配置（Ollama） ==========
+LLM_ENABLED = True                    # 是否启用大模型检查（False 则回退到正则）
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL = "qwen2.5:7b"           # 默认模型
+OLLAMA_TIMEOUT = 30                   # 单次请求超时秒数

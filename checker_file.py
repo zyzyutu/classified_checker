@@ -95,7 +95,8 @@ def _extract_archive(fpath, extract_dir, password=None):
 
 
 def check_encrypted_files(enc_files, enc_archives, password, keywords,
-                          log_callback=None, max_workers=6):
+                          log_callback=None, max_workers=6,
+                          use_llm=False, llm_model=None, llm_base_url=None):
     """
     用密码解密加密文件并检查涉密内容。
 
@@ -106,6 +107,9 @@ def check_encrypted_files(enc_files, enc_archives, password, keywords,
         keywords:      关键词列表
         log_callback:  日志回调
         max_workers:   并行线程数
+        use_llm:       是否使用大模型
+        llm_model:     Ollama 模型名
+        llm_base_url:  Ollama 地址
 
     返回:
         (details, successful, failed)
@@ -132,7 +136,14 @@ def check_encrypted_files(enc_files, enc_archives, password, keywords,
             if text.startswith("[") and ("加密" in text or "损坏" in text):
                 return (fpath, False, [])
             file_details = []
-            for line_no, content, keyword in check_text_for_keywords(text, pattern):
+            if use_llm and llm_model:
+                from utils import check_text
+                matches = check_text(text, keywords, use_llm=True,
+                                     llm_model=llm_model, llm_base_url=llm_base_url,
+                                     log_callback=log_callback)
+            else:
+                matches = check_text_for_keywords(text, pattern)
+            for line_no, content, keyword in matches:
                 file_details.append({
                     "file": fpath, "line_no": line_no,
                     "content": content, "keyword": keyword, "file_type": ext
@@ -163,7 +174,14 @@ def check_encrypted_files(enc_files, enc_archives, password, keywords,
                             continue
                         if file_text.startswith("[") and ("加密" in file_text or "损坏" in file_text):
                             continue
-                        for line_no, content, keyword in check_text_for_keywords(file_text, pattern):
+                        if use_llm and llm_model:
+                            from utils import check_text
+                            matches = check_text(file_text, keywords, use_llm=True,
+                                                 llm_model=llm_model, llm_base_url=llm_base_url,
+                                                 log_callback=log_callback)
+                        else:
+                            matches = check_text_for_keywords(file_text, pattern)
+                        for line_no, content, keyword in matches:
                             arch_details.append({
                                 "file": fpath, "line_no": line_no,
                                 "content": content, "keyword": keyword,
@@ -416,7 +434,8 @@ def _check_magic_number(fpath, expected_ext):
 
 # ==================== 主检查函数 ====================
 
-def check_files(dirs, keywords, log_callback=None, max_workers=6):
+def check_files(dirs, keywords, log_callback=None, max_workers=6,
+                use_llm=False, llm_model=None, llm_base_url=None):
     """
     递归扫描目录下所有支持的文件和压缩包，多线程并行检查涉密信息。
 
@@ -425,6 +444,9 @@ def check_files(dirs, keywords, log_callback=None, max_workers=6):
         keywords:     关键词列表
         log_callback: 日志回调函数（可选）
         max_workers:  并行线程数（默认6）
+        use_llm:      是否使用大模型检查
+        llm_model:    Ollama 模型名
+        llm_base_url: Ollama 地址
     """
     if isinstance(dirs, str):
         dirs = [d.strip() for d in dirs.split(";") if d.strip()]
@@ -524,6 +546,7 @@ def check_files(dirs, keywords, log_callback=None, max_workers=6):
 
     # ========== 阶段三：多线程并行检查普通文件 ==========
     def process_one_file(fpath, ext):
+        # 从外层闭包获取 LLM 配置
         ext = _check_magic_number(fpath, ext)
         result_type = ext
         data = {"file": fpath, "ext": ext, "matched": False, "details": [],
@@ -577,7 +600,14 @@ def check_files(dirs, keywords, log_callback=None, max_workers=6):
             return result_type, data
 
         file_details = []
-        for line_no, content, keyword in check_text_for_keywords(file_text, pattern):
+        if use_llm and llm_model:
+            from utils import check_text
+            matches = check_text(file_text, keywords, use_llm=True,
+                                 llm_model=llm_model, llm_base_url=llm_base_url,
+                                 log_callback=log_callback)
+        else:
+            matches = check_text_for_keywords(file_text, pattern)
+        for line_no, content, keyword in matches:
             file_details.append({
                 "file": fpath, "line_no": line_no,
                 "content": content, "keyword": keyword, "file_type": ext

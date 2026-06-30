@@ -327,7 +327,7 @@ def _section_image(image):
 
 # ==================== 主函数 ====================
 
-def generate_report(results, keywords, output_dir=None):
+def generate_report(results, keywords, output_dir=None, use_llm=False, llm_model=None):
     """生成 Markdown 格式的涉密信息检查报告，返回文件路径。"""
     if output_dir is None:
         output_dir = REPORT_DIR
@@ -341,10 +341,17 @@ def generate_report(results, keywords, output_dir=None):
     file = results.get("file", {})
     image = results.get("image", {})
 
+    # 检测方法说明
+    if use_llm and llm_model:
+        method_str = f"大模型语义分析（Ollama/{llm_model}）"
+    else:
+        method_str = "正则表达式模糊匹配"
+
     lines = [
         "# 涉密信息综合检查报告", "",
         f"**检查时间**: {now.strftime('%Y-%m-%d %H:%M:%S')}",
         f"**检查关键词**: {', '.join(keywords)}",
+        f"**检测方法**: {method_str}",
         "**学号**: 23020007167 23020007173",
         "**GitHub**: https://github.com/zyzyutu/classified_checker", "",
         "---", "",

@@ -13,10 +13,13 @@ import queue
 
 from config import (DOC_DIR, IMG_DIR,
                     DEFAULT_KEYWORDS, WEB_TARGET_URL,
-                    WEB_MAX_WORKERS, WEB_CACHE_PATH)
+                    WEB_MAX_WORKERS, WEB_CACHE_PATH,
+                    LLM_ENABLED, OLLAMA_BASE_URL, OLLAMA_MODEL)
+from llm_checker import check_ollama_connection, list_local_models
 from checker_web import check_web
 from checker_db import check_database, check_all_databases
 from db_adapters import create_adapter
+from llm_checker import check_database_with_llm
 from checker_file import check_files, check_encrypted_files
 from checker_image import check_images
 from report import generate_report
@@ -242,6 +245,36 @@ class App:
                   foreground="#888888",
                   font=("Microsoft YaHei", 13)).pack(side=tk.LEFT, padx=(8, 0))
 
+        # 大模型配置
+        ttk.Label(config_frame, text="大模型检查:", width=lbl_w,
+                  anchor=tk.E, font=lbl_font).grid(row=7, column=0, padx=(0, 8), pady=row_pad)
+        llm_frame = ttk.Frame(config_frame)
+        llm_frame.grid(row=7, column=1, columnspan=2, sticky=tk.W, padx=(0, ctrl_pad))
+
+        self.llm_enabled_var = tk.BooleanVar(value=LLM_ENABLED)
+        ttk.Checkbutton(llm_frame, text="启用",
+                        variable=self.llm_enabled_var,
+                        command=self._toggle_llm).pack(side=tk.LEFT)
+
+        self.llm_model_var = tk.StringVar(value=OLLAMA_MODEL)
+        self.llm_model_combo = ttk.Combobox(llm_frame, textvariable=self.llm_model_var,
+                                            width=18, font=("Microsoft YaHei", 12))
+        self.llm_model_combo.pack(side=tk.LEFT, padx=(10, 0))
+
+        # 刷新模型列表按钮
+        tk.Button(llm_frame, text="刷新", font=("Microsoft YaHei", 11),
+                  bg="#3c3c3c", fg=ACCENT_COLOR, relief=tk.FLAT, padx=8, pady=2,
+                  cursor="hand2", command=self._refresh_llm_models).pack(side=tk.LEFT, padx=(6, 0))
+
+        # 连接状态标签
+        self.llm_status_var = tk.StringVar(value="未检测")
+        self.llm_status_label = ttk.Label(llm_frame, textvariable=self.llm_status_var,
+                                          font=("Microsoft YaHei", 11))
+        self.llm_status_label.pack(side=tk.LEFT, padx=(10, 0))
+
+        # 初始化时检测 Ollama
+        self._refresh_llm_models()
+
         # ---------- 操作按钮 ----------
         btn_frame = ttk.Frame(top_frame)
         btn_frame.pack(fill=tk.X, padx=2, pady=(0, 4))
@@ -412,6 +445,31 @@ class App:
         """更新线程数标签显示"""
         self.workers_label.config(text=str(self.web_workers_var.get()))
 
+    def _toggle_llm(self):
+        """切换大模型启用状态"""
+        if self.llm_enabled_var.get():
+            self.llm_model_combo.config(state="readonly")
+            self._refresh_llm_models()
+        else:
+            self.llm_model_combo.config(state="disabled")
+            self.llm_status_var.set("已禁用（使用正则匹配）")
+
+    def _refresh_llm_models(self):
+        """刷新 Ollama 模型列表"""
+        ok, models = check_ollama_connection(OLLAMA_BASE_URL)
+        if ok:
+            self.llm_model_combo["values"] = models
+            if models and self.llm_model_var.get() not in models:
+                self.llm_model_var.set(models[0])
+            self.llm_status_var.set(f"✓ 已连接 ({len(models)}个模型)")
+            self.llm_status_label.config(foreground="#6A9955")
+            if not self.llm_enabled_var.get():
+                self.llm_model_combo.config(state="disabled")
+        else:
+            self.llm_model_combo["values"] = []
+            self.llm_status_var.set("✗ 未连接 (请启动Ollama)")
+            self.llm_status_label.config(foreground="#F44747")
+
     def _browse_dir(self, var):
         """选择目录（替换）"""
         path = filedialog.askdirectory()
@@ -557,6 +615,11 @@ class App:
             web_workers = self.web_workers_var.get()
             web_incremental = self.web_incremental_var.get()
 
+            # 大模型配置
+            use_llm = self.llm_enabled_var.get()
+            llm_model = self.llm_model_var.get().strip() or None
+            llm_base_url = OLLAMA_BASE_URL
+
             # 从UI收集所有数据库连接配置
             db_conns = []
             for row in self.db_conn_rows:
@@ -599,7 +662,10 @@ class App:
                                       log_callback=log_cb,
                                       max_workers=web_workers,
                                       incremental=web_incremental,
-                                      cache_path=WEB_CACHE_PATH),
+                                      cache_path=WEB_CACHE_PATH,
+                                      use_llm=use_llm,
+                                      llm_model=llm_model,
+                                      llm_base_url=llm_base_url),
                     "网页检查", 5, 25)
                 if result is None:
                     stopped = True
@@ -664,12 +730,44 @@ class App:
                         continue
 
                     try:
-                        if conn["db_name"]:
-                            result = check_database(db_adapter, conn["db_name"],
-                                                    keywords, log_callback=log_cb)
+                        if use_llm and llm_model:
+                            # 大模型模式：用 LLM 替代正则精匹配
+                            if conn["db_name"]:
+                                result = check_database_with_llm(
+                                    db_adapter, conn["db_name"], keywords,
+                                    model=llm_model, base_url=llm_base_url,
+                                    log_callback=log_cb)
+                            else:
+                                # 多库顺序检查（LLM模式）
+                                user_dbs = db_adapter.list_databases()
+                                result = {"total_databases": len(user_dbs),
+                                          "total_tables": 0, "total_records": 0,
+                                          "candidate_records": 0, "matched_tables": 0,
+                                          "table_stats": {}, "details": []}
+                                for db_idx, db_name in enumerate(user_dbs):
+                                    log_cb(f"  [数据库] 检查 {db_name} "
+                                           f"({db_idx+1}/{len(user_dbs)}) [LLM]...")
+                                    sub = check_database_with_llm(
+                                        db_adapter, db_name, keywords,
+                                        model=llm_model, base_url=llm_base_url,
+                                        log_callback=log_cb)
+                                    result["total_tables"] += sub["total_tables"]
+                                    result["total_records"] += sub["total_records"]
+                                    result["candidate_records"] += sub["candidate_records"]
+                                    result["matched_tables"] += sub["matched_tables"]
+                                    for tname, tstats in sub["table_stats"].items():
+                                        result["table_stats"][f"{db_name}.{tname}"] = tstats
+                                    for d in sub["details"]:
+                                        d["table"] = f"{db_name}.{d['table']}"
+                                        result["details"].append(d)
                         else:
-                            result = check_all_databases(db_adapter, keywords,
-                                                         log_callback=log_cb)
+                            # 正则模式
+                            if conn["db_name"]:
+                                result = check_database(db_adapter, conn["db_name"],
+                                                        keywords, log_callback=log_cb)
+                            else:
+                                result = check_all_databases(db_adapter, keywords,
+                                                             log_callback=log_cb)
                     except Exception as e:
                         self.log_queue.put(("ERROR", f"  检查异常: {e}"))
                         result = None
@@ -726,7 +824,10 @@ class App:
                     "file",
                     lambda: check_files(doc_dir_input, keywords,
                                         log_callback=log_cb,
-                                        max_workers=web_workers),
+                                        max_workers=web_workers,
+                                        use_llm=use_llm,
+                                        llm_model=llm_model,
+                                        llm_base_url=llm_base_url),
                     "文件检查", 55, 80)
                 if result is None:
                     stopped = True
@@ -817,7 +918,9 @@ class App:
                     self.log_queue.put(("INFO", f"  正在解密 {total_enc} 个加密文件..."))
                     decrypt_details, decrypt_ok, decrypt_fail = check_encrypted_files(
                         enc_files, enc_archives, password, keywords,
-                        log_callback=log_cb, max_workers=web_workers)
+                        log_callback=log_cb, max_workers=web_workers,
+                        use_llm=use_llm, llm_model=llm_model,
+                        llm_base_url=llm_base_url)
 
                     # 更新状态
                     for e in enc_files:
@@ -873,7 +976,9 @@ class App:
                 self.log_queue.put(("INFO", ""))
                 self.log_queue.put(("INFO", "正在自动生成检查报告..."))
                 try:
-                    report_path = generate_report(self.results, keywords)
+                    report_path = generate_report(self.results, keywords,
+                                                  use_llm=use_llm,
+                                                  llm_model=llm_model)
                     self.log_queue.put(("SUCCESS",
                                         f"  报告已生成: {report_path}"))
                 except Exception as e:
@@ -902,8 +1007,12 @@ class App:
         kw_text = self.keywords_var.get().strip()
         keywords = [kw.strip() for kw in kw_text.split(",") if kw.strip()]
 
+        use_llm = self.llm_enabled_var.get()
+        llm_model = self.llm_model_var.get().strip() or None
+
         try:
-            report_path = generate_report(self.results, keywords)
+            report_path = generate_report(self.results, keywords,
+                                          use_llm=use_llm, llm_model=llm_model)
             self._log("SUCCESS", f"报告已生成: {report_path}")
             messagebox.showinfo("成功", f"报告已生成:\n{report_path}")
         except Exception as e:

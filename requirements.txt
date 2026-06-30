@@ -12,6 +12,11 @@ rarfile>=4.0
 py7zr>=0.20.0
 msoffcrypto-tool>=5.0.0
 
+# 大模型检查（本地 Ollama）：
+# 需要安装 Ollama: https://ollama.ai
+# 下载模型: ollama pull qwen2.5:7b
+# 启动服务: ollama serve
+
 # 以下为可选依赖，按需安装：
 # SQL Server:  pip install pymssql
 # PostgreSQL:  pip install psycopg2-binary

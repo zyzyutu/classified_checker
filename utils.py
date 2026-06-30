@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-工具模块 - 正则表达式模糊匹配构建器
+工具模块 - 文本涉密检查工具
+支持两种模式：
+  1. 正则模糊匹配（传统方法，作为回退方案）
+  2. 大模型语义分析（主要方法，通过 Ollama 调用本地大模型）
 """
 
 import re
 
+
+# ========== 正则模糊匹配（回退方案） ==========
 
 def build_fuzzy_pattern(keyword):
     """
@@ -15,7 +20,6 @@ def build_fuzzy_pattern(keyword):
       - 关键词中间插入任意字符的情况
     原理：在关键词每个字符之间插入 .{0,2}?（匹配0~2个任意字符）
     """
-    # 逐字符构建模糊模式，字符间允许插入0~2个任意字符
     pattern_parts = []
     for ch in keyword:
         pattern_parts.append(re.escape(ch))
@@ -31,7 +35,6 @@ def build_combined_pattern(keywords):
     if not keywords:
         return None
     patterns = [build_fuzzy_pattern(kw) for kw in keywords]
-    # 合并为一个大正则：每个子模式用非捕获组包裹
     combined = "|".join(f"(?:{p.pattern})" for p in patterns)
     return re.compile(combined, re.IGNORECASE)
 
@@ -52,8 +55,8 @@ def _extract_context(text, match, ctx_len=40):
 
 def check_text_for_keywords(text, pattern):
     """
-    扫描文本，返回所有关键词匹配。同一行的多个关键词合并为一条，同行重复匹配去重。
-    内容摘要：短文本直接展示，长文本截取关键词周围的上下文。
+    正则模式：扫描文本，返回所有关键词匹配。
+    同一行的多个关键词合并为一条，同行重复匹配去重。
 
     参数:
         text:   待检查的文本内容
@@ -62,7 +65,7 @@ def check_text_for_keywords(text, pattern):
     返回:
         [(行号, 行内容, 匹配关键词逗号分隔), ...]
     """
-    line_matches = {}  # (line_no, content) -> {keywords}
+    line_matches = {}
     for i, line in enumerate(text.split("\n"), 1):
         line_stripped = line.strip()
         if not line_stripped:
@@ -70,7 +73,6 @@ def check_text_for_keywords(text, pattern):
         matches = [m for m in pattern.finditer(line_stripped) if m.group()]
         if not matches:
             continue
-        # 短文本直接展示，长文本截取关键词上下文
         if len(line_stripped) <= 120:
             content = line_stripped
         else:
@@ -83,3 +85,36 @@ def check_text_for_keywords(text, pattern):
     return [(line_no, content, ", ".join(sorted(keywords)))
             for (line_no, content), keywords in line_matches.items()
             if keywords]
+
+
+# ========== 统一接口（自动选择 LLM 或正则） ==========
+
+def check_text(text, keywords, use_llm=False, llm_model=None,
+               llm_base_url=None, llm_timeout=30, log_callback=None):
+    """
+    统一文本检查接口。
+
+    参数:
+        text:          待检查文本
+        keywords:      关键词列表
+        use_llm:       是否使用大模型（False 则用正则）
+        llm_model:     Ollama 模型名
+        llm_base_url:  Ollama 地址
+        llm_timeout:   LLM 超时秒数
+        log_callback:  日志回调
+
+    返回:
+        [(行号, 内容摘要, 匹配关键词), ...]
+    """
+    if use_llm:
+        from llm_checker import check_text_for_keywords_llm
+        return check_text_for_keywords_llm(
+            text, keywords, model=llm_model,
+            base_url=llm_base_url, timeout=llm_timeout,
+            log_callback=log_callback
+        )
+    else:
+        pattern = build_combined_pattern(keywords)
+        if not pattern:
+            return []
+        return check_text_for_keywords(text, pattern)

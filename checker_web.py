@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from bs4 import BeautifulSoup
 
-from utils import build_combined_pattern, check_text_for_keywords
+from utils import build_combined_pattern, check_text_for_keywords, check_text
 
 # 全局 Session 复用连接池
 _session = requests.Session()
@@ -112,13 +112,20 @@ def _fetch_page(url, cache_entry=None, incremental=False):
             return "new", url, None, empty_info
 
 
-def _check_page(url, html, pattern):
+def _check_page(url, html, pattern, keywords=None, use_llm=False,
+                llm_model=None, llm_base_url=None, log_callback=None):
     """检查单个页面内容，返回 (details, new_links)"""
     soup = BeautifulSoup(html, "html.parser")
     text_content = soup.get_text(separator="\n")
 
     details = []
-    for line_no, content, keyword in check_text_for_keywords(text_content, pattern):
+    if use_llm and llm_model and keywords:
+        matches = check_text(text_content, keywords, use_llm=True,
+                             llm_model=llm_model, llm_base_url=llm_base_url,
+                             log_callback=log_callback)
+    else:
+        matches = check_text_for_keywords(text_content, pattern)
+    for line_no, content, keyword in matches:
         details.append({
             "url": url,
             "line_no": line_no,
@@ -144,7 +151,9 @@ def _check_page(url, html, pattern):
 # ==================== 主检查函数 ====================
 
 def _check_single_web(url, pattern, log_callback=None, max_depth=None,
-                      max_workers=6, incremental=False, cache=None):
+                      max_workers=6, incremental=False, cache=None,
+                      keywords=None, use_llm=False, llm_model=None,
+                      llm_base_url=None):
     """
     BFS 并行爬取单个起始URL的网页涉密信息。
     """
@@ -237,7 +246,9 @@ def _check_single_web(url, pattern, log_callback=None, max_depth=None,
 
             # 并行检查内容
             check_futures = {
-                executor.submit(_check_page, p_url, p_html, pattern): p_url
+                executor.submit(_check_page, p_url, p_html, pattern,
+                                keywords, use_llm, llm_model, llm_base_url,
+                                log_callback): p_url
                 for p_url, p_html in pages_to_check
             }
             for future in as_completed(check_futures):
@@ -287,7 +298,8 @@ def _check_single_web(url, pattern, log_callback=None, max_depth=None,
 
 
 def check_web(urls, keywords, log_callback=None, max_depth=None,
-              max_workers=6, incremental=False, cache_path=None):
+              max_workers=6, incremental=False, cache_path=None,
+              use_llm=False, llm_model=None, llm_base_url=None):
     """
     多线程并行爬取检查网页涉密信息。支持多起始URL。
 
@@ -299,6 +311,9 @@ def check_web(urls, keywords, log_callback=None, max_depth=None,
         max_workers:  并行线程数（默认6）
         incremental:  是否启用增量检测
         cache_path:   缓存文件路径
+        use_llm:      是否使用大模型
+        llm_model:    Ollama 模型名
+        llm_base_url: Ollama 地址
 
     返回:
         dict: {
@@ -343,7 +358,11 @@ def check_web(urls, keywords, log_callback=None, max_depth=None,
             max_depth=max_depth,
             max_workers=max_workers,
             incremental=incremental,
-            cache=cache
+            cache=cache,
+            keywords=keywords,
+            use_llm=use_llm,
+            llm_model=llm_model,
+            llm_base_url=llm_base_url
         )
 
         total += result["total"]
