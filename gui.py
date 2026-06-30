@@ -358,13 +358,6 @@ class App:
         dbname_entry = ttk.Entry(g, textvariable=dbname_var, font=small_font, width=14)
         dbname_entry.grid(row=row, column=4, padx=(0, 6), pady=2)
 
-        # 删除按钮
-        del_btn = tk.Button(g, text="×", font=("Microsoft YaHei", 12, "bold"),
-                            fg="#ff5555", bg=BG_COLOR, relief=tk.FLAT, width=2,
-                            cursor="hand2",
-                            command=lambda: self._remove_db_connection(row))
-        del_btn.grid(row=row, column=5, pady=2)
-
         # SQLite 切换时隐藏/显示用户名密码
         def on_type_change(*_):
             if type_var.get() == "SQLite":
@@ -380,28 +373,38 @@ class App:
         type_combo.bind("<<ComboboxSelected>>", on_type_change)
         on_type_change()  # 初始化
 
-        self.db_conn_rows.append({
+        # 先构建行数据，再创建删除按钮（按钮命令引用 conn_data）
+        conn_data = {
             "row": row,  # 网格行号
-            "widgets": [type_combo, host_entry, user_entry, pwd_entry, dbname_entry, del_btn],
+            "widgets": [type_combo, host_entry, user_entry, pwd_entry, dbname_entry],
             "type_var": type_var, "host_var": host_var,
             "user_var": user_var, "pwd_var": pwd_var,
             "dbname_var": dbname_var
-        })
+        }
+        self.db_conn_rows.append(conn_data)
 
-    def _remove_db_connection(self, grid_row):
-        """删除一条数据库连接"""
-        for i, row_data in enumerate(self.db_conn_rows):
-            if row_data["row"] == grid_row:
-                # 销毁该行所有控件
-                for w in row_data["widgets"]:
-                    w.destroy()
-                self.db_conn_rows.pop(i)
-                break
+        # 删除按钮（按引用查找当前索引，不受行号重排影响）
+        del_btn = tk.Button(g, text="×", font=("Microsoft YaHei", 12, "bold"),
+                            fg="#ff5555", bg=BG_COLOR, relief=tk.FLAT, width=2,
+                            cursor="hand2",
+                            command=lambda ref=conn_data: self._remove_db_connection(ref))
+        del_btn.grid(row=row, column=5, pady=2)
+        conn_data["widgets"].append(del_btn)
+
+    def _remove_db_connection(self, ref):
+        """删除一条数据库连接（按引用查找）"""
+        try:
+            idx = self.db_conn_rows.index(ref)
+        except ValueError:
+            return
+        row_data = self.db_conn_rows[idx]
+        for w in row_data["widgets"]:
+            w.destroy()
+        self.db_conn_rows.pop(idx)
         # 重新布局：所有行上移
         for i, row_data in enumerate(self.db_conn_rows):
             new_row = i + 1  # row=0 是标题
             for w in row_data["widgets"]:
-                info = w.grid_info()
                 w.grid(row=new_row)
             row_data["row"] = new_row
 

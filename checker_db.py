@@ -3,8 +3,8 @@
 数据库检查模块 - 通过适配器支持多种数据库（MySQL/SQL Server/PostgreSQL/SQLite）
 优化：
   1. 适配器封装 SQL 方言差异
-  2. LIKE 精确子串匹配 + Python re 模糊精确匹配
-  3. 多库并行检查（ThreadPoolExecutor）
+  2. LIKE 子串匹配 + Python re 精确匹配
+  3. 多库顺序检查（共享连接，避免并发冲突）
 """
 
 from utils import build_combined_pattern, check_text_for_keywords
@@ -171,13 +171,12 @@ def check_database(adapter, db_name, keywords, log_callback=None):
 
 def check_all_databases(adapter, keywords, log_callback=None):
     """
-    并行检查所有用户数据库。
+    顺序检查所有用户数据库。
 
     参数:
         adapter:      DatabaseAdapter 实例（已连接）
         keywords:     关键词列表
         log_callback: 日志回调函数（可选）
-        max_workers:  并行检查的数据库数（默认4）
 
     返回:
         dict: 与 check_database 相同结构，table_stats 的 key 带数据库名前缀
